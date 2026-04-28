@@ -1,0 +1,20 @@
+.codex
+
+# Build outputs
+/network-manager/network-manager
+/network-manager/network-manager-tray
+/tailscale-tray/tailscale-tray
+
+# Debug artifacts
+/tailscale-tray/tray-icon-debug.png
+/tailscale-tray/internal/tray/tray-icon-debug.png
+
+# Python cache
+__pycache__/
+*.py[cod]
+
+# Editor and temp files
+*.log
+*.swp
+*.tmp
+.DS_Store
