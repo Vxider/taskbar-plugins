@@ -27,7 +27,7 @@ Dry run:
 
 ### `network-manager`
 
-A tray app focused on 4G modem power and mode control.
+A tray app focused on CMCC ML307-series 4G modem power and mode control.
 
 - Modes: `On`, `Standby`, `Off`, `Auto`
 - Uses the modem AT control port

@@ -2,7 +2,15 @@
 
 Standalone taskbar plugin for:
 
-- 4G modem mode control: `On`, `Standby`, `Off`, `Auto`
+- CMCC ML307-series 4G modem mode control: `On`, `Standby`, `Off`, `Auto`
+
+## Hardware
+
+The current implementation is written for CMCC ML307-series hardware.
+
+- README-level target: `ML307`
+- Sysfs fallback match in code: USB vendor/product `2ecc:3012`
+- Fallback model label in code when `mmcli` cannot identify the modem: `ML307C/ML307B`
 
 ## 4G behavior
 
