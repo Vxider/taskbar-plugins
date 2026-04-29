@@ -38,10 +38,12 @@ func TestSendATWithRetry(t *testing.T) {
 
 func TestWaitForATPortReadyTracksReenumeratedPort(t *testing.T) {
 	origFind := findATPortFunc
+	origFindAll := findATPortsFunc
 	origSend := sendATFunc
 	origSleep := sleepFunc
 	t.Cleanup(func() {
 		findATPortFunc = origFind
+		findATPortsFunc = origFindAll
 		sendATFunc = origSend
 		sleepFunc = origSleep
 	})
@@ -53,6 +55,9 @@ func TestWaitForATPortReadyTracksReenumeratedPort(t *testing.T) {
 			return ""
 		}
 		return "/dev/ttyUSB3"
+	}
+	findATPortsFunc = func() []string {
+		return []string{"/dev/ttyUSB3"}
 	}
 
 	sendATFunc = func(path, command string) (string, error) {
@@ -73,5 +78,47 @@ func TestWaitForATPortReadyTracksReenumeratedPort(t *testing.T) {
 	}
 	if port != "/dev/ttyUSB3" {
 		t.Fatalf("waitForATPortReady() port = %q, want %q", port, "/dev/ttyUSB3")
+	}
+}
+
+func TestSendATAcrossCandidatesFallsBackToAnotherPort(t *testing.T) {
+	origFind := findATPortFunc
+	origFindAll := findATPortsFunc
+	origSend := sendATFunc
+	origSleep := sleepFunc
+	t.Cleanup(func() {
+		findATPortFunc = origFind
+		findATPortsFunc = origFindAll
+		sendATFunc = origSend
+		sleepFunc = origSleep
+	})
+
+	findATPortFunc = func() string {
+		return "/dev/ttyUSB2"
+	}
+	findATPortsFunc = func() []string {
+		return []string{"/dev/ttyUSB2", "/dev/ttyUSB3"}
+	}
+	sendATFunc = func(path, command string) (string, error) {
+		switch path {
+		case "/dev/ttyUSB2":
+			return "", errors.New("wrong serial function")
+		case "/dev/ttyUSB3":
+			return "OK", nil
+		default:
+			return "", errors.New("unexpected port")
+		}
+	}
+	sleepFunc = func(time.Duration) {}
+
+	response, port, err := sendATAcrossCandidates("/dev/ttyUSB2", "AT", 2, time.Millisecond)
+	if err != nil {
+		t.Fatalf("sendATAcrossCandidates() error = %v", err)
+	}
+	if response != "OK" {
+		t.Fatalf("sendATAcrossCandidates() response = %q, want %q", response, "OK")
+	}
+	if port != "/dev/ttyUSB3" {
+		t.Fatalf("sendATAcrossCandidates() port = %q, want %q", port, "/dev/ttyUSB3")
 	}
 }

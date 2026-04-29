@@ -13,9 +13,10 @@ import (
 )
 
 var (
-	findATPortFunc = findATPort
-	sendATFunc     = sendAT
-	sleepFunc      = time.Sleep
+	findATPortFunc  = findATPort
+	findATPortsFunc = findATPorts
+	sendATFunc      = sendAT
+	sleepFunc       = time.Sleep
 )
 
 func Run(args []string) error {
@@ -48,10 +49,12 @@ func Run(args []string) error {
 		return err
 	}
 
-	if _, err := sendATWithRetry(port, "AT", 3, 300*time.Millisecond); err != nil {
+	_, port, err = sendATAcrossCandidates(port, "AT", 3, 300*time.Millisecond)
+	if err != nil {
 		return err
 	}
-	if _, err := sendATWithRetry(port, "AT+CFUN="+cfun, 3, 300*time.Millisecond); err != nil {
+	_, port, err = sendATAcrossCandidates(port, "AT+CFUN="+cfun, 3, 300*time.Millisecond)
+	if err != nil {
 		return err
 	}
 
@@ -143,6 +146,31 @@ func sendATWithRetry(path, command string, attempts int, delay time.Duration) (s
 	return "", fmt.Errorf("%s failed after %d attempt(s): %w", command, attempts, lastErr)
 }
 
+func sendATAcrossCandidates(initialPath, command string, attempts int, delay time.Duration) (string, string, error) {
+	if attempts < 1 {
+		attempts = 1
+	}
+
+	var lastErr error
+	for attempt := 1; attempt <= attempts; attempt++ {
+		for _, candidate := range candidateATPorts(initialPath) {
+			response, err := sendATFunc(candidate, command)
+			if err == nil {
+				return response, candidate, nil
+			}
+			lastErr = err
+		}
+		if attempt < attempts {
+			sleepFunc(delay)
+		}
+	}
+
+	if lastErr == nil {
+		lastErr = fmt.Errorf("no modem AT ports found")
+	}
+	return "", initialPath, fmt.Errorf("%s failed after %d attempt(s): %w", command, attempts, lastErr)
+}
+
 func waitForATPortReady(initialPath string, timeout time.Duration) (string, error) {
 	deadline := time.Now().Add(timeout)
 	var lastErr error
@@ -165,10 +193,10 @@ func waitForATPortReady(initialPath string, timeout time.Duration) (string, erro
 }
 
 func candidateATPorts(initialPath string) []string {
-	seen := make(map[string]struct{}, 2)
+	seen := make(map[string]struct{}, 4)
 	var ports []string
 
-	for _, path := range []string{initialPath, findATPortFunc()} {
+	for _, path := range append([]string{initialPath, findATPortFunc()}, findATPortsFunc()...) {
 		if path == "" {
 			continue
 		}
@@ -188,11 +216,32 @@ func writeNewID() error {
 }
 
 func findATPort() string {
-	device, ok := modemsysfs.FirstDevice()
-	if !ok || device.ATTTY == "" {
+	ports := findATPorts()
+	if len(ports) == 0 {
 		return ""
 	}
-	return "/dev/" + device.ATTTY
+	return ports[0]
+}
+
+func findATPorts() []string {
+	device, ok := modemsysfs.FirstDevice()
+	if !ok {
+		return nil
+	}
+
+	ttys := device.ATTTYs
+	if len(ttys) == 0 && device.ATTTY != "" {
+		ttys = []string{device.ATTTY}
+	}
+
+	ports := make([]string, 0, len(ttys))
+	for _, tty := range ttys {
+		if tty == "" {
+			continue
+		}
+		ports = append(ports, "/dev/"+tty)
+	}
+	return ports
 }
 
 func run(name string, args ...string) error {

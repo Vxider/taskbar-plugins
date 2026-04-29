@@ -110,9 +110,23 @@ func TestTrayIconUsesGrayForInactiveBars(t *testing.T) {
 	}
 
 	got := color.NRGBAModel.Convert(img.At(5, 14)).(color.NRGBA)
-	want := color.NRGBA{R: 0x7A, G: 0x7A, B: 0x7A, A: 0xFF}
+	want := signalInactiveColor()
 	if got != want {
 		t.Fatalf("inactive bar color = %#v, want %#v", got, want)
+	}
+}
+
+func TestTrayIconUsesBlueForActiveBars(t *testing.T) {
+	icon := trayIcon(color.NRGBA{R: 0xC7, G: 0x83, B: 0x19, A: 0xFF}, signalIconBars, 2)
+	img, err := png.Decode(bytes.NewReader(icon))
+	if err != nil {
+		t.Fatalf("decode tray icon: %v", err)
+	}
+
+	got := color.NRGBAModel.Convert(img.At(1, 14)).(color.NRGBA)
+	want := signalActiveColor()
+	if got != want {
+		t.Fatalf("active bar color = %#v, want %#v", got, want)
 	}
 }
 

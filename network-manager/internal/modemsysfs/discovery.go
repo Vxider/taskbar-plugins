@@ -8,14 +8,14 @@ import (
 )
 
 const (
-	VendorID          = "2ecc"
-	ProductID         = "3012"
-	atInterfaceSuffix = "1.2"
+	VendorID  = "2ecc"
+	ProductID = "3012"
 )
 
 type Device struct {
 	SysfsPath        string
 	ATTTY            string
+	ATTTYs           []string
 	NetworkInterface string
 }
 
@@ -48,9 +48,12 @@ func scan(usbDevicesRoot, ttyClassRoot, netClassRoot string) []Device {
 
 		devices = append(devices, Device{
 			SysfsPath:        realPath,
-			ATTTY:            findATTTY(realPath, ttyClassRoot),
+			ATTTYs:           findATTTYs(realPath, ttyClassRoot),
 			NetworkInterface: findNetworkInterface(realPath, netClassRoot),
 		})
+		if len(devices[len(devices)-1].ATTTYs) > 0 {
+			devices[len(devices)-1].ATTTY = devices[len(devices)-1].ATTTYs[0]
+		}
 	}
 
 	sort.Slice(devices, func(i, j int) bool {
@@ -77,24 +80,46 @@ func matchingDevicePath(devicePath string) (string, bool) {
 	return realPath, true
 }
 
-func findATTTY(devicePath, ttyClassRoot string) string {
-	matches, err := filepath.Glob(filepath.Join(ttyClassRoot, "ttyUSB*"))
-	if err != nil {
-		return ""
+func findATTTYs(devicePath, ttyClassRoot string) []string {
+	matches := ttyMatches(ttyClassRoot)
+	if len(matches) == 0 {
+		return nil
 	}
 
-	sort.Strings(matches)
-	interfacePrefix := devicePath + ":" + atInterfaceSuffix + string(os.PathSeparator)
+	devicePrefix := devicePath + ":"
+	seen := make(map[string]struct{}, len(matches))
+	var ttys []string
 	for _, match := range matches {
 		resolved, err := filepath.EvalSymlinks(match)
 		if err != nil {
 			continue
 		}
-		if strings.HasPrefix(resolved, interfacePrefix) {
-			return filepath.Base(match)
+		if resolved != devicePath && !strings.HasPrefix(resolved, devicePrefix) {
+			continue
 		}
+
+		name := filepath.Base(match)
+		if _, ok := seen[name]; ok {
+			continue
+		}
+		seen[name] = struct{}{}
+		ttys = append(ttys, name)
 	}
-	return ""
+	return ttys
+}
+
+func ttyMatches(ttyClassRoot string) []string {
+	patterns := []string{"ttyUSB*", "ttyACM*"}
+	var matches []string
+	for _, pattern := range patterns {
+		found, err := filepath.Glob(filepath.Join(ttyClassRoot, pattern))
+		if err != nil {
+			continue
+		}
+		matches = append(matches, found...)
+	}
+	sort.Strings(matches)
+	return matches
 }
 
 func findNetworkInterface(devicePath, netClassRoot string) string {

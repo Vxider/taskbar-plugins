@@ -20,17 +20,19 @@ func trayIcon(fill color.NRGBA, mode signalIconMode, bars int) []byte {
 		width  = 16
 		height = 16
 	)
+	_ = fill
 
 	img := image.NewNRGBA(image.Rect(0, 0, width, height))
-	inactive := color.NRGBA{R: 0x7A, G: 0x7A, B: 0x7A, A: 0xFF}
+	active := signalActiveColor()
+	inactive := signalInactiveColor()
 
 	switch mode {
 	case signalIconOff:
 		drawOffMark(img, inactive)
 	case signalIconStandby:
-		drawSignalBars(img, 1, 14, 0, fill, inactive)
+		drawSignalBars(img, 1, 14, 0, active, inactive)
 	default:
-		drawSignalBars(img, 1, 14, bars, fill, inactive)
+		drawSignalBars(img, 1, 14, bars, active, inactive)
 	}
 
 	var out bytes.Buffer
@@ -38,6 +40,14 @@ func trayIcon(fill color.NRGBA, mode signalIconMode, bars int) []byte {
 		return nil
 	}
 	return out.Bytes()
+}
+
+func signalActiveColor() color.NRGBA {
+	return color.NRGBA{R: 0x2B, G: 0x84, B: 0xC6, A: 0xFF}
+}
+
+func signalInactiveColor() color.NRGBA {
+	return color.NRGBA{R: 0x7A, G: 0x7A, B: 0x7A, A: 0xFF}
 }
 
 func drawSignalBars(img *image.NRGBA, x0, baseline, bars int, active, inactive color.NRGBA) {

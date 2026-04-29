@@ -183,6 +183,10 @@ func (a *App) setModemMode(mode string) {
 
 func (a *App) maybeApplyAuto(modemState modemctl.State, config configstate.State) {
 	target := modemctl.DesiredTarget(config.ModemMode, modemState.WiFiConnected)
+	if liveTargetSatisfied(modemState, target) {
+		a.syncLastAppliedTarget(target, config)
+		return
+	}
 
 	a.mu.Lock()
 	busy := a.modemBusy
@@ -191,13 +195,63 @@ func (a *App) maybeApplyAuto(modemState modemctl.State, config configstate.State
 	lastAt := a.lastModemAttemptAt
 	a.mu.Unlock()
 
-	if busy || target == lastApplied {
-		return
-	}
-	if target == lastTarget && time.Since(lastAt) < 45*time.Second {
+	if !shouldReconcileModemTarget(config.ModemMode, target, lastApplied, lastTarget, lastAt, busy) {
 		return
 	}
 	a.applyModemTarget(target, false)
+}
+
+func liveTargetSatisfied(state modemctl.State, target string) bool {
+	target = strings.ToLower(strings.TrimSpace(target))
+	if target != configstate.ModeOn {
+		return false
+	}
+	if !state.Available {
+		return false
+	}
+	return !strings.EqualFold(strings.TrimSpace(state.ModemState), "disabled")
+}
+
+func (a *App) syncLastAppliedTarget(target string, config configstate.State) {
+	target = strings.TrimSpace(target)
+	if target == "" || target == config.LastAppliedTarget {
+		return
+	}
+
+	a.mu.Lock()
+	if a.config.LastAppliedTarget == target {
+		a.mu.Unlock()
+		return
+	}
+	a.config.LastAppliedTarget = target
+	updated := a.config
+	a.mu.Unlock()
+
+	if err := configstate.Save(updated); err != nil {
+		a.mu.Lock()
+		a.lastError = err.Error()
+		a.mu.Unlock()
+		if a.logger != nil {
+			a.logger.Printf("modem helper sync target=%s err=%v", target, err)
+		}
+	}
+}
+
+func shouldReconcileModemTarget(mode, target, lastApplied, lastTarget string, lastAt time.Time, busy bool) bool {
+	if busy || target == "" || target == lastApplied {
+		return false
+	}
+
+	mode = strings.ToLower(strings.TrimSpace(mode))
+	if mode != configstate.ModeAuto {
+		// Manual modes get one automatic reconciliation attempt per app run.
+		return target != lastTarget
+	}
+
+	if target == lastTarget && time.Since(lastAt) < 45*time.Second {
+		return false
+	}
+	return true
 }
 
 func (a *App) applyModemTarget(target string, force bool) {
