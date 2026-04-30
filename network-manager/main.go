@@ -42,7 +42,7 @@ func main() {
 		os.Getenv("WAYLAND_DISPLAY"),
 	)
 	installSignalHandler(logger)
-	waitForStatusNotifierWatcher(logger, 8*time.Second)
+	waitForStatusNotifierWatcher(logger)
 	logTrayDBusState(logger, os.Getpid())
 	tray.Run(logger)
 	releaseSingleInstanceLock()
@@ -182,22 +182,21 @@ func releaseSingleInstanceLock() {
 	instanceLockFile = nil
 }
 
-func waitForStatusNotifierWatcher(logger *log.Logger, timeout time.Duration) {
-	deadline := time.Now().Add(timeout)
+func waitForStatusNotifierWatcher(logger *log.Logger) {
 	for {
 		ready, err := statusNotifierWatcherReady()
 		if ready {
 			return
 		}
-		if time.Now().After(deadline) {
-			if err != nil {
-				logger.Printf("status notifier watcher wait timed out: %v", err)
-			} else {
-				logger.Printf("status notifier watcher wait timed out")
-			}
-			return
+		if err != nil {
+			logger.Printf("status notifier watcher not ready: %v", err)
+		} else {
+			logger.Printf("status notifier watcher not ready")
 		}
-		time.Sleep(200 * time.Millisecond)
+
+		select {
+		case <-time.After(time.Second):
+		}
 	}
 }
 

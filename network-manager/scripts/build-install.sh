@@ -65,8 +65,10 @@ fi
 BIN_DIR="$(dirname -- "${INSTALL_PATH}")"
 APP_DIR="${HOME}/.local/share/applications"
 AUTOSTART_DIR="${HOME}/.config/autostart"
+SYSTEMD_USER_DIR="${HOME}/.config/systemd/user"
 DESKTOP_FILE="${APP_DIR}/network-manager-tray.desktop"
 AUTOSTART_FILE="${AUTOSTART_DIR}/network-manager-tray.desktop"
+SYSTEMD_USER_FILE="${SYSTEMD_USER_DIR}/network-manager-tray.service"
 POLKIT_RULE="/etc/polkit-1/rules.d/49-network-manager-tray.rules"
 
 echo "==> network manager tray build + install"
@@ -85,7 +87,7 @@ if [[ "${DRY_RUN}" -eq 1 ]]; then
   exit 0
 fi
 
-mkdir -p "${BIN_DIR}" "${APP_DIR}"
+mkdir -p "${BIN_DIR}" "${APP_DIR}" "${SYSTEMD_USER_DIR}"
 if [[ "${AUTOSTART}" -eq 1 ]]; then
   mkdir -p "${AUTOSTART_DIR}"
 fi
@@ -121,11 +123,45 @@ EOF
 chmod +x "${DESKTOP_FILE}"
 
 if [[ "${AUTOSTART}" -eq 1 ]]; then
-  cp "${DESKTOP_FILE}" "${AUTOSTART_FILE}"
+  cat > "${AUTOSTART_FILE}" <<EOF
+[Desktop Entry]
+Version=1.0
+Type=Application
+Name=Network Manager Tray
+Comment=4G modem taskbar plugin
+Exec=systemctl --user start network-manager-tray.service
+Icon=network-wireless
+Terminal=false
+Categories=Network;Utility;
+StartupNotify=false
+EOF
   chmod +x "${AUTOSTART_FILE}"
 else
   rm -f "${AUTOSTART_FILE}"
 fi
+
+cat > "${SYSTEMD_USER_FILE}" <<EOF
+[Unit]
+Description=Network Manager Tray
+After=graphical-session.target
+PartOf=graphical-session.target
+
+[Service]
+ExecStart=${INSTALL_PATH} --replace-existing
+Restart=always
+RestartSec=2
+Environment=DISPLAY=:0
+Environment=WAYLAND_DISPLAY=wayland-0
+Environment=XDG_RUNTIME_DIR=/run/user/$(id -u)
+Environment=DBUS_SESSION_BUS_ADDRESS=unix:path=/run/user/$(id -u)/bus
+
+[Install]
+WantedBy=default.target
+EOF
+
+systemctl --user daemon-reload
+systemctl --user enable network-manager-tray.service >/dev/null
+systemctl --user restart network-manager-tray.service
 
 if [[ "${INSTALL_POLKIT}" -eq 1 ]]; then
   cat > "${TMP_RULE}" <<EOF
@@ -145,6 +181,7 @@ fi
 echo "==> done"
 echo "binary: ${INSTALL_PATH}"
 echo "launcher: ${DESKTOP_FILE}"
+echo "systemd user service: ${SYSTEMD_USER_FILE}"
 if [[ "${AUTOSTART}" -eq 1 ]]; then
   echo "autostart: ${AUTOSTART_FILE}"
 fi
