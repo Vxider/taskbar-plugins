@@ -86,7 +86,6 @@ func findATTTYs(devicePath, ttyClassRoot string) []string {
 		return nil
 	}
 
-	devicePrefix := devicePath + ":"
 	seen := make(map[string]struct{}, len(matches))
 	var ttys []string
 	for _, match := range matches {
@@ -94,7 +93,7 @@ func findATTTYs(devicePath, ttyClassRoot string) []string {
 		if err != nil {
 			continue
 		}
-		if resolved != devicePath && !strings.HasPrefix(resolved, devicePrefix) {
+		if !belongsToDevice(resolved, devicePath) {
 			continue
 		}
 
@@ -129,15 +128,26 @@ func findNetworkInterface(devicePath, netClassRoot string) string {
 	}
 
 	sort.Strings(matches)
-	interfacePrefix := devicePath + ":"
 	for _, match := range matches {
 		resolved, err := filepath.EvalSymlinks(match)
 		if err != nil {
 			continue
 		}
-		if strings.HasPrefix(resolved, interfacePrefix) {
+		if belongsToDevice(resolved, devicePath) {
 			return filepath.Base(match)
 		}
 	}
 	return ""
+}
+
+func belongsToDevice(resolvedPath, devicePath string) bool {
+	resolvedPath = filepath.Clean(resolvedPath)
+	devicePath = filepath.Clean(devicePath)
+	if resolvedPath == devicePath {
+		return true
+	}
+	if strings.HasPrefix(resolvedPath, devicePath+string(filepath.Separator)) {
+		return true
+	}
+	return strings.HasPrefix(resolvedPath, devicePath+":")
 }

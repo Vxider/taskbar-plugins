@@ -108,6 +108,20 @@ func TestScanIgnoresNonMatchingDevices(t *testing.T) {
 	}
 }
 
+func TestBelongsToDeviceMatchesInterfaceDescendants(t *testing.T) {
+	devicePath := "/sys/devices/platform/axi/1000480000.usb/usb1/1-1/1-1.3"
+
+	if !belongsToDevice(devicePath+"/1-1.3:1.0/net/eth1", devicePath) {
+		t.Fatalf("belongsToDevice() = false, want true for network interface descendant")
+	}
+	if !belongsToDevice(devicePath+"/1-1.3:1.2/ttyUSB2/tty/ttyUSB2", devicePath) {
+		t.Fatalf("belongsToDevice() = false, want true for tty descendant")
+	}
+	if belongsToDevice("/sys/devices/platform/axi/1001100000.mmc/mmc_host/mmc1/mmc1:0001/mmc1:0001:1/net/wlan0", devicePath) {
+		t.Fatalf("belongsToDevice() = true, want false for unrelated device")
+	}
+}
+
 func mustMkdirAll(t *testing.T, path string) {
 	t.Helper()
 	if err := os.MkdirAll(path, 0o755); err != nil {

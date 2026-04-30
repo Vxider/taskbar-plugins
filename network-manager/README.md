@@ -21,12 +21,24 @@ The plugin uses the ML307 modem's AT control port and maps modes like this:
 - `Off` -> `AT+CFUN=0`
 - `Auto` -> `Standby` when Wi-Fi is connected, `On` when Wi-Fi is not connected
 
-To make low-power states stable, the helper keeps `ModemManager` stopped while the modem is in `Standby` or `Off`.
-When switching back to `On`, the helper restores `AT+CFUN=1` and starts `ModemManager` again.
+The helper no longer stops or starts `ModemManager`. It only sends the modem
+AT command when write actions are explicitly enabled. This reduces risk on
+uConsole-class hardware where restarting device-management services can disturb
+shared device paths.
 
 ## Permissions
 
-4G write actions require privilege. The tray app uses:
+4G write actions are disabled by default. In this mode the tray reads modem and
+network state only; opening the menu will not run the privileged helper or send
+AT commands.
+
+To explicitly enable modem writes, start the app with:
+
+```bash
+NETWORK_MANAGER_TRAY_ENABLE_WRITES=1 network-manager-tray
+```
+
+When enabled, 4G write actions require privilege. The tray app uses:
 
 ```text
 pkexec <installed-binary> --helper modem <on|standby|off>

@@ -31,6 +31,7 @@ func main() {
 		os.Getenv("DISPLAY"),
 		os.Getenv("WAYLAND_DISPLAY"),
 	)
+	waitForStatusNotifierWatcher(logger, 8*time.Second)
 	logTrayDBusState(logger, os.Getpid())
 	tray.Run(logger)
 }
@@ -144,6 +145,47 @@ func waitForLock(file *os.File, timeout time.Duration) error {
 		}
 		time.Sleep(150 * time.Millisecond)
 	}
+}
+
+func waitForStatusNotifierWatcher(logger *log.Logger, timeout time.Duration) {
+	deadline := time.Now().Add(timeout)
+	for {
+		ready, err := statusNotifierWatcherReady()
+		if ready {
+			return
+		}
+		if time.Now().After(deadline) {
+			if err != nil {
+				logger.Printf("status notifier watcher wait timed out: %v", err)
+			} else {
+				logger.Printf("status notifier watcher wait timed out")
+			}
+			return
+		}
+		time.Sleep(200 * time.Millisecond)
+	}
+}
+
+func statusNotifierWatcherReady() (bool, error) {
+	conn, err := dbus.SessionBus()
+	if err != nil {
+		return false, err
+	}
+
+	var names []string
+	call := conn.BusObject().Call("org.freedesktop.DBus.ListNames", 0)
+	if call.Err != nil {
+		return false, call.Err
+	}
+	if err := call.Store(&names); err != nil {
+		return false, err
+	}
+	for _, name := range names {
+		if name == "org.kde.StatusNotifierWatcher" {
+			return true, nil
+		}
+	}
+	return false, nil
 }
 
 func logTrayDBusState(logger *log.Logger, pid int) {

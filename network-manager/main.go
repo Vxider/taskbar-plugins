@@ -5,6 +5,7 @@ import (
 	"io"
 	"log"
 	"os"
+	"os/signal"
 	"path/filepath"
 	"strconv"
 	"strings"
@@ -40,8 +41,11 @@ func main() {
 		os.Getenv("DISPLAY"),
 		os.Getenv("WAYLAND_DISPLAY"),
 	)
+	installSignalHandler(logger)
+	waitForStatusNotifierWatcher(logger, 8*time.Second)
 	logTrayDBusState(logger, os.Getpid())
 	tray.Run(logger)
+	releaseSingleInstanceLock()
 }
 
 func hasArg(want string) bool {
@@ -153,6 +157,70 @@ func waitForLock(file *os.File, timeout time.Duration) error {
 		}
 		time.Sleep(150 * time.Millisecond)
 	}
+}
+
+func installSignalHandler(logger *log.Logger) {
+	signals := make(chan os.Signal, 2)
+	signal.Notify(signals, syscall.SIGTERM, syscall.SIGINT)
+
+	go func() {
+		sig := <-signals
+		if logger != nil {
+			logger.Printf("received signal %s; shutting down", sig)
+		}
+		releaseSingleInstanceLock()
+		os.Exit(0)
+	}()
+}
+
+func releaseSingleInstanceLock() {
+	if instanceLockFile == nil {
+		return
+	}
+	_ = unix.Flock(int(instanceLockFile.Fd()), unix.LOCK_UN)
+	_ = instanceLockFile.Close()
+	instanceLockFile = nil
+}
+
+func waitForStatusNotifierWatcher(logger *log.Logger, timeout time.Duration) {
+	deadline := time.Now().Add(timeout)
+	for {
+		ready, err := statusNotifierWatcherReady()
+		if ready {
+			return
+		}
+		if time.Now().After(deadline) {
+			if err != nil {
+				logger.Printf("status notifier watcher wait timed out: %v", err)
+			} else {
+				logger.Printf("status notifier watcher wait timed out")
+			}
+			return
+		}
+		time.Sleep(200 * time.Millisecond)
+	}
+}
+
+func statusNotifierWatcherReady() (bool, error) {
+	conn, err := dbus.SessionBus()
+	if err != nil {
+		return false, err
+	}
+
+	var names []string
+	call := conn.BusObject().Call("org.freedesktop.DBus.ListNames", 0)
+	if call.Err != nil {
+		return false, call.Err
+	}
+	if err := call.Store(&names); err != nil {
+		return false, err
+	}
+	for _, name := range names {
+		if name == "org.kde.StatusNotifierWatcher" {
+			return true, nil
+		}
+	}
+	return false, nil
 }
 
 func logTrayDBusState(logger *log.Logger, pid int) {

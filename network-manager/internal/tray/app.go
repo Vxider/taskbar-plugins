@@ -23,7 +23,10 @@ type App struct {
 	ctx    context.Context
 	cancel context.CancelFunc
 
-	mu sync.Mutex
+	systemWritesEnabled bool
+
+	mu        sync.Mutex
+	refreshMu sync.Mutex
 
 	config configstate.State
 
@@ -37,7 +40,6 @@ type App struct {
 
 	statusItem       *systray.MenuItem
 	errorItem        *systray.MenuItem
-	modemModeMenu    *systray.MenuItem
 	modemOnItem      *systray.MenuItem
 	modemStandbyItem *systray.MenuItem
 	modemOffItem     *systray.MenuItem
@@ -48,15 +50,22 @@ type App struct {
 func Run(logger *log.Logger) {
 	ctx, cancel := context.WithCancel(context.Background())
 	app := &App{
-		logger: logger,
-		ctx:    ctx,
-		cancel: cancel,
-		config: configstate.Load(),
+		logger:              logger,
+		ctx:                 ctx,
+		cancel:              cancel,
+		systemWritesEnabled: systemWritesEnabledFromEnv(os.Getenv),
+		config:              configstate.Load(),
 	}
 	systray.Run(app.onReady, app.onExit)
 }
 
 func (a *App) onReady() {
+	// Some Linux tray hosts do not handle menu-only StatusNotifierItems
+	// reliably. Provide no-op activation handlers so icon clicks never return
+	// UnknownMethod while the DBusMenu remains available to the host.
+	systray.SetOnTapped(func() {})
+	systray.SetOnSecondaryTapped(func() {})
+
 	a.statusItem = systray.AddMenuItem("4G: loading...", "")
 	a.statusItem.Disable()
 	a.errorItem = systray.AddMenuItem("", "")
@@ -64,20 +73,20 @@ func (a *App) onReady() {
 	a.errorItem.Hide()
 
 	systray.AddSeparator()
-	a.modemModeMenu = systray.AddMenuItem("4G Mode", "4G modem mode")
-	a.modemOnItem = a.modemModeMenu.AddSubMenuItemCheckbox("On", "", false)
-	a.modemStandbyItem = a.modemModeMenu.AddSubMenuItemCheckbox("Standby", "", false)
-	a.modemOffItem = a.modemModeMenu.AddSubMenuItemCheckbox("Off", "", false)
-	a.modemAutoItem = a.modemModeMenu.AddSubMenuItemCheckbox("Auto", "", false)
+	a.modemOnItem = systray.AddMenuItemCheckbox("4G On", "", false)
+	a.modemStandbyItem = systray.AddMenuItemCheckbox("4G Standby", "", false)
+	a.modemOffItem = systray.AddMenuItemCheckbox("4G Off", "", false)
+	a.modemAutoItem = systray.AddMenuItemCheckbox("4G Auto", "", false)
 
 	systray.AddSeparator()
 	a.quitItem = systray.AddMenuItem("Quit", "Quit the tray app")
 
 	go a.watchQuit()
 	go a.watchModeClicks()
-	go a.watchTrayOpen()
 	go a.pollLoop()
 
+	// Avoid refreshing from systray.TrayOpenedCh. Some DBusMenu hosts can keep
+	// an input grab stuck if the menu layout is mutated while the menu opens.
 	a.refresh()
 }
 
@@ -116,17 +125,6 @@ func (a *App) watchModeClicks() {
 	}
 }
 
-func (a *App) watchTrayOpen() {
-	for {
-		select {
-		case <-a.ctx.Done():
-			return
-		case <-systray.TrayOpenedCh:
-			a.refresh()
-		}
-	}
-}
-
 func (a *App) pollLoop() {
 	ticker := time.NewTicker(15 * time.Second)
 	defer ticker.Stop()
@@ -142,6 +140,9 @@ func (a *App) pollLoop() {
 }
 
 func (a *App) refresh() {
+	a.refreshMu.Lock()
+	defer a.refreshMu.Unlock()
+
 	ctx, cancel := context.WithTimeout(a.ctx, 5*time.Second)
 	defer cancel()
 
@@ -165,6 +166,17 @@ func (a *App) refresh() {
 }
 
 func (a *App) setModemMode(mode string) {
+	if !a.systemWritesEnabled {
+		a.mu.Lock()
+		a.lastError = "system writes disabled"
+		modemState := a.modemState
+		modemBusy := a.modemBusy
+		config := a.config
+		a.mu.Unlock()
+		a.render(modemState, modemBusy, config)
+		return
+	}
+
 	a.mu.Lock()
 	a.config.ModemMode = mode
 	config := a.config
@@ -177,12 +189,16 @@ func (a *App) setModemMode(mode string) {
 	}
 
 	a.refresh()
-	target := modemctl.DesiredTarget(mode, a.modemState.WiFiConnected)
+	target := modemctl.DesiredTarget(mode, a.modemState.AltNetConnected)
 	a.applyModemTarget(target, true)
 }
 
 func (a *App) maybeApplyAuto(modemState modemctl.State, config configstate.State) {
-	target := modemctl.DesiredTarget(config.ModemMode, modemState.WiFiConnected)
+	if !a.systemWritesEnabled {
+		return
+	}
+
+	target := modemctl.DesiredTarget(config.ModemMode, modemState.AltNetConnected)
 	if liveTargetSatisfied(modemState, target) {
 		a.syncLastAppliedTarget(target, config)
 		return
@@ -248,6 +264,14 @@ func shouldReconcileModemTarget(mode, target, lastApplied, lastTarget string, la
 		return target != lastTarget
 	}
 
+	// On uConsole, background transitions into modem standby/off have been
+	// observed to destabilize the built-in keyboard path. Keep auto-mode
+	// restorative only: automatically bring the modem back online, but do not
+	// silently push it into lower-power states.
+	if target != configstate.ModeOn {
+		return false
+	}
+
 	if target == lastTarget && time.Since(lastAt) < 45*time.Second {
 		return false
 	}
@@ -255,6 +279,13 @@ func shouldReconcileModemTarget(mode, target, lastApplied, lastTarget string, la
 }
 
 func (a *App) applyModemTarget(target string, force bool) {
+	if !a.systemWritesEnabled {
+		if a.logger != nil {
+			a.logger.Printf("modem helper skipped target=%s: system writes disabled", strings.TrimSpace(target))
+		}
+		return
+	}
+
 	target = strings.TrimSpace(target)
 	if target == "" {
 		return
@@ -323,7 +354,7 @@ func (a *App) applyModemTarget(target string, force bool) {
 
 func (a *App) render(modemState modemctl.State, modemBusy bool, config configstate.State) {
 	busy := modemBusy
-	iconMode, iconBars := traySignalIcon(modemState, config)
+	iconMode, iconBars := traySignalIcon(modemState, config, a.systemWritesEnabled)
 	icon := trayIcon(
 		trayColor(modemState, config, busy),
 		iconMode,
@@ -349,7 +380,7 @@ func (a *App) render(modemState modemctl.State, modemBusy bool, config configsta
 	default:
 		a.modemOnItem.Check()
 	}
-	if modemBusy {
+	if modemBusy || !a.systemWritesEnabled {
 		a.modemOnItem.Disable()
 		a.modemStandbyItem.Disable()
 		a.modemOffItem.Disable()
@@ -369,6 +400,15 @@ func (a *App) render(modemState modemctl.State, modemBusy bool, config configsta
 		a.errorItem.Show()
 	} else {
 		a.errorItem.Hide()
+	}
+}
+
+func systemWritesEnabledFromEnv(getenv func(string) string) bool {
+	switch strings.ToLower(strings.TrimSpace(getenv("NETWORK_MANAGER_TRAY_ENABLE_WRITES"))) {
+	case "1", "true", "yes", "on":
+		return true
+	default:
+		return false
 	}
 }
 
@@ -410,7 +450,7 @@ func trayColor(modemState modemctl.State, config configstate.State, busy bool) c
 		return color.NRGBA{R: 0xC7, G: 0x83, B: 0x19, A: 0xFF}
 	case strings.EqualFold(modemctl.LiveSummary(modemState), "online"):
 		return color.NRGBA{R: 0x2D, G: 0x9A, B: 0x5F, A: 0xFF}
-	case modemState.WiFiConnected || strings.EqualFold(modemctl.LiveSummary(modemState), "registered"):
+	case modemState.AltNetConnected || strings.EqualFold(modemctl.LiveSummary(modemState), "registered"):
 		return color.NRGBA{R: 0x2B, G: 0x84, B: 0xC6, A: 0xFF}
 	default:
 		return color.NRGBA{R: 0x6B, G: 0x72, B: 0x79, A: 0xFF}
@@ -434,7 +474,12 @@ func trayTitle(modemState modemctl.State, config configstate.State, busy bool) s
 }
 
 func trayTooltip(modemState modemctl.State, config configstate.State, busy bool) string {
-	return modemMenuLabel(modemState, config, busy)
+	label := modemMenuLabel(modemState, config, busy)
+	diag := modemDiagnosticLabel(modemState)
+	if diag == "" {
+		return label
+	}
+	return label + " | " + diag
 }
 
 func modemMenuLabel(modemState modemctl.State, config configstate.State, busy bool) string {
@@ -450,6 +495,19 @@ func modemMenuLabel(modemState modemctl.State, config configstate.State, busy bo
 	return "4G: " + modeText + " | " + detailText
 }
 
+func modemDiagnosticLabel(state modemctl.State) string {
+	var parts []string
+
+	if strings.TrimSpace(state.NetworkPort) != "" && !state.Available {
+		parts = append(parts, "modem net "+strings.TrimSpace(state.NetworkPort))
+	}
+	if strings.TrimSpace(state.PrimaryPort) != "" && (!state.Available || !state.ModemManagerActive) {
+		parts = append(parts, "AT "+strings.TrimSpace(state.PrimaryPort))
+	}
+
+	return strings.Join(parts, " | ")
+}
+
 func modemStateLabel(state modemctl.State, config configstate.State) string {
 	if !state.Installed {
 		return "not installed"
@@ -458,7 +516,7 @@ func modemStateLabel(state modemctl.State, config configstate.State) string {
 		switch config.LastAppliedTarget {
 		case configstate.ModeStandby:
 			if config.ModemMode == configstate.ModeAuto {
-				return "standby by wifi (helper-managed)"
+				return "standby by " + alternateNetworkLabel(state) + " (helper-managed)"
 			}
 			return "standby (helper-managed)"
 		case configstate.ModeOff:
@@ -476,10 +534,10 @@ func modemStateLabel(state modemctl.State, config configstate.State) string {
 	case configstate.ModeOff:
 		return "off (" + summary + ")"
 	case configstate.ModeAuto:
-		if state.WiFiConnected {
-			return "standby by wifi (" + summary + ")"
+		if state.AltNetConnected {
+			return "standby by " + alternateNetworkLabel(state) + " (" + summary + ")"
 		}
-		return "on by wifi (" + summary + ")"
+		return "on by auto (" + summary + ")"
 	default:
 		return "on (" + summary + ")"
 	}
@@ -514,7 +572,7 @@ func compactDetailLabel(state modemctl.State, config configstate.State) string {
 		return "no mm"
 	}
 
-	target := modemctl.DesiredTarget(config.ModemMode, state.WiFiConnected)
+	target := modemctl.DesiredTarget(config.ModemMode, state.AltNetConnected)
 	if modemErrorForDisplay(state, config) != "" {
 		return "n/a"
 	}
@@ -522,8 +580,8 @@ func compactDetailLabel(state modemctl.State, config configstate.State) string {
 		return ""
 	}
 	if target == configstate.ModeStandby {
-		if config.ModemMode == configstate.ModeAuto && state.WiFiConnected {
-			return "wifi"
+		if config.ModemMode == configstate.ModeAuto && state.AltNetConnected {
+			return alternateNetworkCompactLabel(state)
 		}
 		return "stdby"
 	}
@@ -553,6 +611,28 @@ func compactDetailLabel(state modemctl.State, config configstate.State) string {
 	}
 }
 
+func alternateNetworkLabel(state modemctl.State) string {
+	switch strings.ToLower(strings.TrimSpace(state.AltNetType)) {
+	case "ethernet":
+		return "wired"
+	case "wifi":
+		return "wifi"
+	default:
+		return "network"
+	}
+}
+
+func alternateNetworkCompactLabel(state modemctl.State) string {
+	switch strings.ToLower(strings.TrimSpace(state.AltNetType)) {
+	case "ethernet":
+		return "wired"
+	case "wifi":
+		return "wifi"
+	default:
+		return "net"
+	}
+}
+
 func compactError(message string) string {
 	message = strings.Join(strings.Fields(strings.TrimSpace(message)), " ")
 	if len(message) > 72 {
@@ -564,8 +644,14 @@ func compactError(message string) string {
 	return message
 }
 
-func traySignalIcon(state modemctl.State, config configstate.State) (signalIconMode, int) {
-	target := modemctl.DesiredTarget(config.ModemMode, state.WiFiConnected)
+func traySignalIcon(state modemctl.State, config configstate.State, systemWritesEnabled bool) (signalIconMode, int) {
+	if !systemWritesEnabled {
+		if bars, ok := signalBarsFromQuality(state.SignalQuality); ok {
+			return signalIconBars, bars
+		}
+	}
+
+	target := modemctl.DesiredTarget(config.ModemMode, state.AltNetConnected)
 	switch target {
 	case configstate.ModeOff:
 		return signalIconOff, 0
@@ -584,7 +670,7 @@ func traySignalIcon(state modemctl.State, config configstate.State) (signalIconM
 }
 
 func signalQualityCompact(state modemctl.State, config configstate.State) string {
-	target := modemctl.DesiredTarget(config.ModemMode, state.WiFiConnected)
+	target := modemctl.DesiredTarget(config.ModemMode, state.AltNetConnected)
 	if target != configstate.ModeOn {
 		return ""
 	}
@@ -636,7 +722,7 @@ func modemErrorForDisplay(state modemctl.State, config configstate.State) string
 		return ""
 	}
 
-	target := modemctl.DesiredTarget(config.ModemMode, state.WiFiConnected)
+	target := modemctl.DesiredTarget(config.ModemMode, state.AltNetConnected)
 	if target != configstate.ModeOn {
 		lower := strings.ToLower(message)
 		if strings.Contains(lower, "couldn't find the modemmanager process in the bus") {

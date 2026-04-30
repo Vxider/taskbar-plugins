@@ -26,15 +26,14 @@ type App struct {
 	networkItems  []*systray.MenuItem
 	exitNodeItems []*systray.MenuItem
 
-	titleItem         *systray.MenuItem
-	connectedItem     *systray.MenuItem
-	accountItem       *systray.MenuItem
-	accountDetailItem *systray.MenuItem
-	deviceItem        *systray.MenuItem
-	networkMenu       *systray.MenuItem
-	errorItem         *systray.MenuItem
-	exitNodesMenu     *systray.MenuItem
-	quitItem          *systray.MenuItem
+	titleItem     *systray.MenuItem
+	connectedItem *systray.MenuItem
+	accountItem   *systray.MenuItem
+	deviceItem    *systray.MenuItem
+	networkMenu   *systray.MenuItem
+	errorItem     *systray.MenuItem
+	exitNodesMenu *systray.MenuItem
+	quitItem      *systray.MenuItem
 }
 
 func Run(logger *log.Logger) {
@@ -52,7 +51,6 @@ func (a *App) onReady() {
 	a.titleItem.Disable()
 	a.connectedItem = systray.AddMenuItem("Loading...", "Connect or disconnect Tailscale")
 	a.accountItem = systray.AddMenuItem("Device: loading...", "Open the Tailscale admin console")
-	a.accountDetailItem = systray.AddMenuItem("Account: loading...", "Open the Tailscale admin console")
 	a.errorItem = systray.AddMenuItem("", "")
 	a.errorItem.Disable()
 	a.errorItem.Hide()
@@ -68,7 +66,6 @@ func (a *App) onReady() {
 
 	go a.watchConnected()
 	go a.watchAccount()
-	go a.watchAccountDetail()
 	go a.watchQuit()
 	go a.watchTrayOpen()
 	go a.pollLoop()
@@ -102,17 +99,6 @@ func (a *App) watchAccount() {
 		case <-a.ctx.Done():
 			return
 		case <-a.accountItem.ClickedCh:
-			a.openAdmin()
-		}
-	}
-}
-
-func (a *App) watchAccountDetail() {
-	for {
-		select {
-		case <-a.ctx.Done():
-			return
-		case <-a.accountDetailItem.ClickedCh:
 			a.openAdmin()
 		}
 	}
@@ -242,18 +228,10 @@ func (a *App) render(state tailscalecli.State, busy bool) {
 	}
 
 	a.accountItem.SetTitle(accountMenuLabel(state))
-	a.accountDetailItem.SetTitle(accountDetailMenuLabel(state))
-	if accountDetailMenuLabel(state) == "" {
-		a.accountDetailItem.Hide()
-	} else {
-		a.accountDetailItem.Show()
-	}
 	if !state.Installed || state.Error != "" {
 		a.accountItem.Disable()
-		a.accountDetailItem.Disable()
 	} else {
 		a.accountItem.Enable()
-		a.accountDetailItem.Enable()
 	}
 	a.deviceItem.SetTitle(deviceMenuLabel(state))
 	a.deviceItem.SetTooltip(deviceMenuTooltip(state))
@@ -479,17 +457,6 @@ func accountMenuLabel(state tailscalecli.State) string {
 	default:
 		return "Account"
 	}
-}
-
-func accountDetailMenuLabel(state tailscalecli.State) string {
-	login := strings.TrimSpace(state.UserLogin)
-	if login != "" {
-		return login
-	}
-	if tailnet := strings.TrimSpace(state.TailnetName); tailnet != "" {
-		return tailnet
-	}
-	return ""
 }
 
 func deviceMenuLabel(state tailscalecli.State) string {

@@ -46,6 +46,37 @@ func TestWiFiStateConnected(t *testing.T) {
 	}
 }
 
+func TestAlternativeNetworkType(t *testing.T) {
+	tests := []struct {
+		deviceType string
+		want       bool
+	}{
+		{deviceType: "wifi", want: true},
+		{deviceType: "ethernet", want: true},
+		{deviceType: "tun", want: false},
+		{deviceType: "loopback", want: false},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.deviceType, func(t *testing.T) {
+			if got := alternativeNetworkType(tt.deviceType); got != tt.want {
+				t.Fatalf("alternativeNetworkType(%q) = %t, want %t", tt.deviceType, got, tt.want)
+			}
+		})
+	}
+}
+
+func TestIsModemNetworkDevice(t *testing.T) {
+	state := State{NetworkPort: "eth1"}
+
+	if !isModemNetworkDevice(state, "eth1") {
+		t.Fatalf("isModemNetworkDevice() = false, want true")
+	}
+	if isModemNetworkDevice(state, "wlan0") {
+		t.Fatalf("isModemNetworkDevice() = true, want false")
+	}
+}
+
 func TestLiveSummary(t *testing.T) {
 	tests := []struct {
 		name  string
@@ -74,6 +105,17 @@ func TestLiveSummary(t *testing.T) {
 				ModemState:         "enabled",
 			},
 			want: "detached",
+		},
+		{
+			name: "presentWhenHardwareHasNetworkPortButMmcliDoesNotExposeModem",
+			state: State{
+				Installed:       true,
+				HardwarePresent: true,
+				NetworkPort:     "eth1",
+				Available:       false,
+				ModemState:      "present",
+			},
+			want: "present",
 		},
 	}
 

@@ -32,6 +32,11 @@ type State struct {
 	WiFiDevice         string
 	WiFiConnection     string
 	WiFiState          string
+	AltNetConnected    bool
+	AltNetDevice       string
+	AltNetType         string
+	AltNetConnection   string
+	AltNetState        string
 }
 
 func Load(ctx context.Context) State {
@@ -114,6 +119,8 @@ func LiveSummary(state State) string {
 	switch {
 	case !state.Installed:
 		return "not installed"
+	case state.HardwarePresent && state.NetworkPort != "" && !state.Available:
+		return "present"
 	case state.HardwarePresent && state.ATReady && !state.ModemManagerActive:
 		return "present"
 	case state.HardwarePresent && state.ATReady && state.ModemManagerActive && !state.Available:
@@ -167,6 +174,13 @@ func loadNMCLIState(ctx context.Context, state *State) {
 		deviceState := parts[2]
 		connection := strings.Join(parts[3:], ":")
 		if deviceType != "wifi" {
+			if !state.AltNetConnected && alternativeNetworkType(deviceType) && networkStateConnected(deviceState) && !isModemNetworkDevice(*state, device) {
+				state.AltNetConnected = true
+				state.AltNetDevice = device
+				state.AltNetType = deviceType
+				state.AltNetConnection = connection
+				state.AltNetState = deviceState
+			}
 			continue
 		}
 		state.WiFiDevice = device
@@ -174,12 +188,21 @@ func loadNMCLIState(ctx context.Context, state *State) {
 		state.WiFiState = deviceState
 		if wifiStateConnected(deviceState) {
 			state.WiFiConnected = true
+			state.AltNetConnected = true
+			state.AltNetDevice = device
+			state.AltNetConnection = connection
+			state.AltNetType = deviceType
+			state.AltNetState = deviceState
 			return
 		}
 	}
 }
 
 func wifiStateConnected(deviceState string) bool {
+	return networkStateConnected(deviceState)
+}
+
+func networkStateConnected(deviceState string) bool {
 	state := strings.ToLower(strings.TrimSpace(deviceState))
 	if state == "connected" || strings.HasPrefix(state, "connected ") || strings.HasPrefix(state, "connected(") {
 		return true
@@ -187,6 +210,19 @@ func wifiStateConnected(deviceState string) bool {
 
 	trimmed := strings.TrimSpace(deviceState)
 	return trimmed == "已连接" || strings.HasPrefix(trimmed, "已连接 ")
+}
+
+func alternativeNetworkType(deviceType string) bool {
+	switch strings.ToLower(strings.TrimSpace(deviceType)) {
+	case "wifi", "ethernet":
+		return true
+	default:
+		return false
+	}
+}
+
+func isModemNetworkDevice(state State, device string) bool {
+	return strings.EqualFold(strings.TrimSpace(state.NetworkPort), strings.TrimSpace(device))
 }
 
 func loadModemManagerState(ctx context.Context, state *State) {

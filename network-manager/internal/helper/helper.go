@@ -44,11 +44,8 @@ func Run(args []string) error {
 		return err
 	}
 
-	_, err = stopModemManager()
-	if err != nil {
-		return err
-	}
-
+	// Keep ModemManager running. Stopping the service can disturb shared device
+	// paths on uConsole-class hardware, including the built-in keyboard path.
 	_, port, err = sendATAcrossCandidates(port, "AT", 3, 300*time.Millisecond)
 	if err != nil {
 		return err
@@ -68,39 +65,7 @@ func Run(args []string) error {
 		return err
 	}
 
-	if err := startModemManager(); err != nil {
-		return err
-	}
 	fmt.Printf("modem %s via %s\n", args[1], readyPort)
-	return nil
-}
-
-func stopModemManager() (bool, error) {
-	if _, err := exec.LookPath("systemctl"); err != nil {
-		return false, nil
-	}
-
-	active := exec.Command("systemctl", "is-active", "--quiet", "ModemManager")
-	if err := active.Run(); err != nil {
-		return false, nil
-	}
-
-	if err := run("systemctl", "stop", "ModemManager"); err != nil {
-		return false, fmt.Errorf("stop ModemManager: %w", err)
-	}
-
-	sleepFunc(500 * time.Millisecond)
-	return true, nil
-}
-
-func startModemManager() error {
-	if _, err := exec.LookPath("systemctl"); err != nil {
-		return nil
-	}
-	if err := run("systemctl", "start", "ModemManager"); err != nil {
-		return fmt.Errorf("start ModemManager: %w", err)
-	}
-	sleepFunc(500 * time.Millisecond)
 	return nil
 }
 

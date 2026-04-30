@@ -2,6 +2,7 @@ package helper
 
 import (
 	"errors"
+	"reflect"
 	"testing"
 	"time"
 )
@@ -120,5 +121,44 @@ func TestSendATAcrossCandidatesFallsBackToAnotherPort(t *testing.T) {
 	}
 	if port != "/dev/ttyUSB3" {
 		t.Fatalf("sendATAcrossCandidates() port = %q, want %q", port, "/dev/ttyUSB3")
+	}
+}
+
+func TestRunStandbyOnlySendsATCommands(t *testing.T) {
+	origFind := findATPortFunc
+	origFindAll := findATPortsFunc
+	origSend := sendATFunc
+	origSleep := sleepFunc
+	t.Cleanup(func() {
+		findATPortFunc = origFind
+		findATPortsFunc = origFindAll
+		sendATFunc = origSend
+		sleepFunc = origSleep
+	})
+
+	findATPortFunc = func() string {
+		return "/dev/ttyUSB2"
+	}
+	findATPortsFunc = func() []string {
+		return []string{"/dev/ttyUSB2"}
+	}
+	sleepFunc = func(time.Duration) {}
+
+	var commands []string
+	sendATFunc = func(path, command string) (string, error) {
+		if path != "/dev/ttyUSB2" {
+			t.Fatalf("sendAT path = %q, want /dev/ttyUSB2", path)
+		}
+		commands = append(commands, command)
+		return "OK", nil
+	}
+
+	if err := Run([]string{"modem", "standby"}); err != nil {
+		t.Fatalf("Run() error = %v", err)
+	}
+
+	want := []string{"AT", "AT+CFUN=4"}
+	if !reflect.DeepEqual(commands, want) {
+		t.Fatalf("commands = %#v, want %#v", commands, want)
 	}
 }

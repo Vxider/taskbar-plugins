@@ -58,23 +58,38 @@ func TestTraySignalIcon(t *testing.T) {
 		name     string
 		state    modemctl.State
 		config   configstate.State
+		writes   bool
 		wantMode signalIconMode
 		wantBars int
 	}{
 		{
 			name:     "off",
 			config:   configstate.State{ModemMode: configstate.ModeOff},
+			writes:   true,
 			wantMode: signalIconOff,
 		},
 		{
 			name:     "standby",
 			config:   configstate.State{ModemMode: configstate.ModeStandby},
+			writes:   true,
 			wantMode: signalIconStandby,
 		},
 		{
 			name:     "onWithSignal",
 			state:    modemctl.State{SignalQuality: "74"},
 			config:   configstate.State{ModemMode: configstate.ModeOn},
+			writes:   true,
+			wantMode: signalIconBars,
+			wantBars: 3,
+		},
+		{
+			name: "readOnlyAutoStandbyWithSignal",
+			state: modemctl.State{
+				AltNetConnected: true,
+				SignalQuality:   "74",
+			},
+			config:   configstate.State{ModemMode: configstate.ModeAuto},
+			writes:   false,
 			wantMode: signalIconBars,
 			wantBars: 3,
 		},
@@ -82,7 +97,7 @@ func TestTraySignalIcon(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			gotMode, gotBars := traySignalIcon(tt.state, tt.config)
+			gotMode, gotBars := traySignalIcon(tt.state, tt.config, tt.writes)
 			if gotMode != tt.wantMode || gotBars != tt.wantBars {
 				t.Fatalf("traySignalIcon() = (%v, %d), want (%v, %d)", gotMode, gotBars, tt.wantMode, tt.wantBars)
 			}
