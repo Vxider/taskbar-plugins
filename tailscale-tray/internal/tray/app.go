@@ -48,11 +48,6 @@ func Run(logger *log.Logger) {
 }
 
 func (a *App) onReady() {
-	// Some Linux tray hosts do not render menu-only StatusNotifierItems reliably.
-	// Expose the item as tappable to keep the icon visible, while still using the menu.
-	systray.SetOnTapped(func() {})
-	systray.SetOnSecondaryTapped(func() {})
-
 	a.titleItem = systray.AddMenuItem("Tailscale", "")
 	a.titleItem.Disable()
 	a.connectedItem = systray.AddMenuItem("Loading...", "Connect or disconnect Tailscale")
@@ -303,8 +298,14 @@ func (a *App) renderNetworkDevices(state tailscalecli.State) {
 		newItems = append(newItems, item)
 	default:
 		for _, peer := range state.Peers {
+			peer := peer
 			item := a.networkMenu.AddSubMenuItem(networkDeviceLabel(peer), networkDeviceTooltip(peer))
-			item.Disable()
+			go func(item *systray.MenuItem, peer tailscalecli.Peer) {
+				for range item.ClickedCh {
+					a.copyPeerURL(peer)
+					return
+				}
+			}(item, peer)
 			newItems = append(newItems, item)
 		}
 	}
@@ -397,6 +398,35 @@ func (a *App) openURL(target string) {
 
 func (a *App) openAdmin() {
 	a.openURL("https://login.tailscale.com/admin/machines")
+}
+
+func (a *App) copyPeerURL(peer tailscalecli.Peer) {
+	url := networkDeviceURL(peer)
+	if url == "" {
+		a.mu.Lock()
+		a.lastError = "device has no Tailscale address"
+		state := a.state
+		busy := a.busy
+		a.mu.Unlock()
+		a.render(state, busy)
+		return
+	}
+
+	if err := copyText(url); err != nil {
+		a.mu.Lock()
+		a.lastError = "copy failed: " + err.Error()
+		state := a.state
+		busy := a.busy
+		a.mu.Unlock()
+		a.render(state, busy)
+		return
+	}
+
+	if err := showCopiedNotification(networkDeviceLabel(peer), url); err != nil {
+		if a.logger != nil {
+			a.logger.Printf("copy notification failed: %v", err)
+		}
+	}
 }
 
 func trayTitle(state tailscalecli.State, busy bool) string {
@@ -494,7 +524,10 @@ func networkDeviceLabel(peer tailscalecli.Peer) string {
 }
 
 func networkDeviceTooltip(peer tailscalecli.Peer) string {
-	parts := make([]string, 0, 2)
+	parts := make([]string, 0, 3)
+	if url := networkDeviceURL(peer); url != "" {
+		parts = append(parts, "copy "+url)
+	}
 	if ip := strings.TrimSpace(peer.IP); ip != "" {
 		parts = append(parts, ip)
 	}
@@ -502,6 +535,16 @@ func networkDeviceTooltip(peer tailscalecli.Peer) string {
 		parts = append(parts, "offline")
 	}
 	return strings.Join(parts, " ")
+}
+
+func networkDeviceURL(peer tailscalecli.Peer) string {
+	if dnsName := strings.Trim(strings.TrimSpace(peer.DNSName), "."); dnsName != "" {
+		return "https://" + dnsName
+	}
+	if ip := strings.TrimSpace(peer.IP); ip != "" {
+		return "http://" + ip
+	}
+	return ""
 }
 
 func exitNodeLabel(node tailscalecli.ExitNode) string {
@@ -555,6 +598,53 @@ func openURL(target string) error {
 			_ = cmd.Wait()
 		}()
 		return nil
+	}
+
+	return exec.ErrNotFound
+}
+
+func copyText(text string) error {
+	copiers := [][]string{
+		{"wl-copy"},
+		{"xclip", "-selection", "clipboard"},
+		{"xsel", "--clipboard", "--input"},
+	}
+
+	for _, args := range copiers {
+		if _, err := exec.LookPath(args[0]); err != nil {
+			continue
+		}
+		cmd := exec.Command(args[0], args[1:]...)
+		cmd.Stdin = strings.NewReader(text)
+		if err := cmd.Run(); err != nil {
+			return err
+		}
+		return nil
+	}
+
+	return exec.ErrNotFound
+}
+
+func showCopiedNotification(device, url string) error {
+	title := "Tailscale URL copied"
+	message := strings.TrimSpace(device)
+	if message == "" || message == "unknown" {
+		message = url
+	} else {
+		message += ": " + url
+	}
+
+	if _, err := exec.LookPath("notify-send"); err == nil {
+		return exec.Command("notify-send", title, message).Run()
+	}
+	if _, err := exec.LookPath("gdbus"); err == nil {
+		return exec.Command(
+			"gdbus", "call", "--session",
+			"--dest", "org.freedesktop.Notifications",
+			"--object-path", "/org/freedesktop/Notifications",
+			"--method", "org.freedesktop.Notifications.Notify",
+			"tailscale-tray", "0", "", title, message, "[]", "{}", "3000",
+		).Run()
 	}
 
 	return exec.ErrNotFound

@@ -28,9 +28,10 @@ type State struct {
 }
 
 type Peer struct {
-	Name   string
-	IP     string
-	Online bool
+	Name    string
+	DNSName string
+	IP      string
+	Online  bool
 }
 
 type ExitNode struct {
@@ -75,9 +76,10 @@ func Load(ctx context.Context) State {
 		peerOnline := asBool(peer["Online"])
 
 		state.Peers = append(state.Peers, Peer{
-			Name:   peerName,
-			IP:     peerIP,
-			Online: peerOnline,
+			Name:    peerName,
+			DNSName: strings.TrimSuffix(strings.TrimSpace(asString(peer["DNSName"])), "."),
+			IP:      peerIP,
+			Online:  peerOnline,
 		})
 
 		if !asBool(peer["ExitNodeOption"]) {
