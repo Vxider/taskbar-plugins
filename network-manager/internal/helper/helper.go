@@ -17,14 +17,19 @@ var (
 	findATPortsFunc = findATPorts
 	sendATFunc      = sendAT
 	sleepFunc       = time.Sleep
+	runFunc         = run
+	writeNewIDFunc  = writeNewID
 )
 
 func Run(args []string) error {
 	if len(args) < 2 {
-		return fmt.Errorf("usage: --helper modem [on|standby|off]")
+		return fmt.Errorf("usage: --helper modem [bind|on|standby|off]")
 	}
 	if args[0] != "modem" {
 		return fmt.Errorf("unknown helper target: %s", args[0])
+	}
+	if strings.EqualFold(strings.TrimSpace(args[1]), "bind") {
+		return ensureATDriver()
 	}
 
 	var cfun string
@@ -74,10 +79,7 @@ func ensureATPort() (string, error) {
 		return port, nil
 	}
 
-	if err := run("modprobe", "option"); err != nil {
-		return "", err
-	}
-	if err := writeNewID(); err != nil && !errors.Is(err, unix.EEXIST) {
+	if err := ensureATDriver(); err != nil {
 		return "", err
 	}
 
@@ -89,6 +91,16 @@ func ensureATPort() (string, error) {
 		sleepFunc(200 * time.Millisecond)
 	}
 	return "", fmt.Errorf("timed out waiting for modem AT port")
+}
+
+func ensureATDriver() error {
+	if err := runFunc("modprobe", "option"); err != nil {
+		return err
+	}
+	if err := writeNewIDFunc(); err != nil && !errors.Is(err, unix.EEXIST) {
+		return err
+	}
+	return nil
 }
 
 func sendATWithRetry(path, command string, attempts int, delay time.Duration) (string, error) {

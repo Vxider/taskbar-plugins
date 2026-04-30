@@ -162,3 +162,34 @@ func TestRunStandbyOnlySendsATCommands(t *testing.T) {
 		t.Fatalf("commands = %#v, want %#v", commands, want)
 	}
 }
+
+func TestRunBindOnlyEnsuresATDriver(t *testing.T) {
+	origRun := runFunc
+	origWrite := writeNewIDFunc
+	t.Cleanup(func() {
+		runFunc = origRun
+		writeNewIDFunc = origWrite
+	})
+
+	var commands [][]string
+	runFunc = func(name string, args ...string) error {
+		commands = append(commands, append([]string{name}, args...))
+		return nil
+	}
+	writeNewIDFunc = func() error {
+		commands = append(commands, []string{"writeNewID"})
+		return nil
+	}
+
+	if err := Run([]string{"modem", "bind"}); err != nil {
+		t.Fatalf("Run() error = %v", err)
+	}
+
+	want := [][]string{
+		{"modprobe", "option"},
+		{"writeNewID"},
+	}
+	if !reflect.DeepEqual(commands, want) {
+		t.Fatalf("commands = %#v, want %#v", commands, want)
+	}
+}

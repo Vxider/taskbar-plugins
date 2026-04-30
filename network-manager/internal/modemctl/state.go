@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"fmt"
+	"os"
 	"os/exec"
 	"regexp"
 	"strconv"
@@ -42,6 +43,11 @@ type State struct {
 	AltNetState        string
 }
 
+var (
+	runCommandFunc = runCommand
+	sleepFunc      = time.Sleep
+)
+
 func Load(ctx context.Context) State {
 	state := State{}
 
@@ -67,6 +73,15 @@ func Load(ctx context.Context) State {
 	if modemID == "" {
 		if strings.Contains(string(listRaw), "No modems were found") {
 			if state.HardwarePresent {
+				if bindErr := ensureATDriver(ctx); bindErr == nil {
+					loadSysfsFallback(&state)
+					if retryRaw, retryErr := run(ctx, "mmcli", "-L"); retryErr == nil {
+						listRaw = retryRaw
+						modemID = parseFirstModemID(string(listRaw))
+					}
+				}
+			}
+			if modemID == "" && state.HardwarePresent {
 				if state.Manufacturer == "" {
 					state.Manufacturer = "CMCC"
 				}
@@ -115,6 +130,48 @@ func Load(ctx context.Context) State {
 
 	loadATSignalQuality(&state)
 	return state
+}
+
+func ensureATDriver(ctx context.Context) error {
+	device, ok := modemsysfs.FirstDevice()
+	if !ok || len(device.ATTTYs) > 0 {
+		return nil
+	}
+
+	if err := runCommandFunc(ctx, "modprobe", "option"); err != nil {
+		if helperErr := runBindHelper(ctx); helperErr != nil {
+			return err
+		}
+	} else if err := writeOptionNewID(); err != nil && !strings.Contains(err.Error(), "File exists") {
+		if helperErr := runBindHelper(ctx); helperErr != nil {
+			return err
+		}
+	}
+
+	deadline := time.Now().Add(2 * time.Second)
+	for time.Now().Before(deadline) {
+		if device, ok := modemsysfs.FirstDevice(); ok && len(device.ATTTYs) > 0 {
+			return nil
+		}
+		sleepFunc(150 * time.Millisecond)
+	}
+	return fmt.Errorf("timed out waiting for modem AT port")
+}
+
+func writeOptionNewID() error {
+	return os.WriteFile(
+		"/sys/bus/usb-serial/drivers/option1/new_id",
+		[]byte(modemsysfs.VendorID+" "+modemsysfs.ProductID),
+		0o644,
+	)
+}
+
+func runBindHelper(ctx context.Context) error {
+	exe, err := os.Executable()
+	if err != nil {
+		return err
+	}
+	return runCommandFunc(ctx, "pkexec", exe, "--helper", "modem", "bind")
 }
 
 func loadATSignalQuality(state *State) {
@@ -420,4 +477,9 @@ func run(ctx context.Context, name string, args ...string) ([]byte, error) {
 		return nil, fmt.Errorf("%s %s: %s", name, strings.Join(args, " "), message)
 	}
 	return stdout.Bytes(), nil
+}
+
+func runCommand(ctx context.Context, name string, args ...string) error {
+	_, err := run(ctx, name, args...)
+	return err
 }

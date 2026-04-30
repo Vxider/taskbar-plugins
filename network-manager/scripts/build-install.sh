@@ -133,7 +133,7 @@ polkit.addRule(function(action, subject) {
   if (action.id == "org.freedesktop.policykit.exec" &&
       action.lookup("program") == "${INSTALL_PATH}" &&
       action.lookup("command_line") &&
-      action.lookup("command_line").indexOf("--helper modem ") >= 0 &&
+      action.lookup("command_line").indexOf("--helper modem") >= 0 &&
       subject.user == "${USER}") {
     return polkit.Result.YES;
   }
