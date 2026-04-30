@@ -127,3 +127,47 @@ func TestLiveSummary(t *testing.T) {
 		})
 	}
 }
+
+func TestSignalQualityFromCSQ(t *testing.T) {
+	tests := []struct {
+		name   string
+		input  string
+		want   string
+		wantOK bool
+	}{
+		{
+			name:   "normal response",
+			input:  "\r\n+CSQ: 20,99\r\n\r\nOK\r\n",
+			want:   "64",
+			wantOK: true,
+		},
+		{
+			name:   "full scale",
+			input:  "+CSQ: 31,99",
+			want:   "100",
+			wantOK: true,
+		},
+		{
+			name:   "unknown",
+			input:  "+CSQ: 99,99",
+			wantOK: false,
+		},
+		{
+			name:   "missing",
+			input:  "OK",
+			wantOK: false,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got, ok := signalQualityFromCSQ(tt.input)
+			if ok != tt.wantOK {
+				t.Fatalf("signalQualityFromCSQ() ok = %t, want %t", ok, tt.wantOK)
+			}
+			if got != tt.want {
+				t.Fatalf("signalQualityFromCSQ() = %q, want %q", got, tt.want)
+			}
+		})
+	}
+}

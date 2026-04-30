@@ -6,9 +6,12 @@ import (
 	"fmt"
 	"os/exec"
 	"regexp"
+	"strconv"
 	"strings"
+	"time"
 
 	"github.com/vxider/codex-buddy/uconsole/network-manager/internal/modemsysfs"
+	"golang.org/x/sys/unix"
 )
 
 type State struct {
@@ -73,6 +76,7 @@ func Load(ctx context.Context) State {
 				if state.ModemState == "" {
 					state.ModemState = "present"
 				}
+				loadATSignalQuality(&state)
 				return state
 			}
 			state.Error = "mmcli reports no modems"
@@ -109,7 +113,127 @@ func Load(ctx context.Context) State {
 		}
 	}
 
+	loadATSignalQuality(&state)
 	return state
+}
+
+func loadATSignalQuality(state *State) {
+	if strings.TrimSpace(state.SignalQuality) != "" {
+		return
+	}
+
+	var candidates []string
+	if state.PrimaryPort != "" {
+		candidates = append(candidates, "/dev/"+state.PrimaryPort)
+	}
+	if device, ok := modemsysfs.FirstDevice(); ok {
+		for _, tty := range device.ATTTYs {
+			if strings.TrimSpace(tty) != "" {
+				candidates = append(candidates, "/dev/"+tty)
+			}
+		}
+	}
+
+	seen := make(map[string]struct{}, len(candidates))
+	for _, candidate := range candidates {
+		if _, ok := seen[candidate]; ok || candidate == "/dev/" {
+			continue
+		}
+		seen[candidate] = struct{}{}
+
+		response, err := sendAT(candidate, "AT+CSQ", 1200*time.Millisecond)
+		if err != nil {
+			continue
+		}
+		if quality, ok := signalQualityFromCSQ(response); ok {
+			state.SignalQuality = quality
+			return
+		}
+	}
+}
+
+func signalQualityFromCSQ(response string) (string, bool) {
+	match := regexp.MustCompile(`\+CSQ:\s*(\d+)\s*,`).FindStringSubmatch(response)
+	if len(match) != 2 {
+		return "", false
+	}
+
+	rssi, err := strconv.Atoi(match[1])
+	if err != nil || rssi < 0 || rssi == 99 {
+		return "", false
+	}
+	if rssi > 31 {
+		rssi = 31
+	}
+
+	quality := rssi * 100 / 31
+	return strconv.Itoa(quality), true
+}
+
+func sendAT(path, command string, timeout time.Duration) (string, error) {
+	fd, err := unix.Open(path, unix.O_RDWR|unix.O_NOCTTY, 0)
+	if err != nil {
+		return "", fmt.Errorf("open %s: %w", path, err)
+	}
+	defer unix.Close(fd)
+
+	tios, err := unix.IoctlGetTermios(fd, unix.TCGETS)
+	if err != nil {
+		return "", fmt.Errorf("termios get: %w", err)
+	}
+
+	tios.Iflag = 0
+	tios.Oflag = 0
+	tios.Cflag = unix.CS8 | unix.CREAD | unix.CLOCAL
+	tios.Lflag = 0
+	tios.Cc[unix.VMIN] = 0
+	tios.Cc[unix.VTIME] = 10
+	tios.Ispeed = unix.B115200
+	tios.Ospeed = unix.B115200
+	if err := unix.IoctlSetTermios(fd, unix.TCSETS, tios); err != nil {
+		return "", fmt.Errorf("termios set: %w", err)
+	}
+
+	if err := unix.IoctlSetInt(fd, unix.TCFLSH, unix.TCIOFLUSH); err != nil {
+		return "", fmt.Errorf("flush tty: %w", err)
+	}
+
+	if _, err := unix.Write(fd, []byte(command+"\r")); err != nil {
+		return "", fmt.Errorf("write %s: %w", command, err)
+	}
+
+	deadline := time.Now().Add(timeout)
+	var response strings.Builder
+	buf := make([]byte, 512)
+	for time.Now().Before(deadline) {
+		pollFds := []unix.PollFd{{Fd: int32(fd), Events: unix.POLLIN}}
+		_, err := unix.Poll(pollFds, 100)
+		if err != nil && err != unix.EINTR {
+			return response.String(), fmt.Errorf("poll tty: %w", err)
+		}
+		if pollFds[0].Revents&unix.POLLIN == 0 {
+			continue
+		}
+		n, err := unix.Read(fd, buf)
+		if err != nil {
+			if err == unix.EAGAIN || err == unix.EWOULDBLOCK {
+				continue
+			}
+			return response.String(), fmt.Errorf("read tty: %w", err)
+		}
+		if n == 0 {
+			continue
+		}
+		response.Write(buf[:n])
+		text := response.String()
+		if strings.Contains(text, "\r\nOK\r\n") {
+			return text, nil
+		}
+		if strings.Contains(text, "ERROR") || strings.Contains(text, "+CME ERROR") {
+			return text, fmt.Errorf("%s failed: %s", command, strings.Join(strings.Fields(strings.TrimSpace(text)), " "))
+		}
+	}
+	return response.String(), fmt.Errorf("%s timed out", command)
 }
 
 func LiveSummary(state State) string {
