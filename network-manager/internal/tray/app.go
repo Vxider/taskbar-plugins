@@ -61,9 +61,9 @@ func Run(logger *log.Logger) {
 
 func (a *App) onReady() {
 	// Some Linux tray hosts do not handle menu-only StatusNotifierItems
-	// reliably. Provide no-op activation handlers so icon clicks never return
+	// reliably. Provide activation handlers so icon clicks never return
 	// UnknownMethod while the DBusMenu remains available to the host.
-	systray.SetOnTapped(func() {})
+	systray.SetOnTapped(a.handleTrayTapped)
 	systray.SetOnSecondaryTapped(func() {})
 
 	a.statusItem = systray.AddMenuItem("4G: loading...", "")
@@ -88,6 +88,10 @@ func (a *App) onReady() {
 	// Avoid refreshing from systray.TrayOpenedCh. Some DBusMenu hosts can keep
 	// an input grab stuck if the menu layout is mutated while the menu opens.
 	a.refresh()
+}
+
+func (a *App) handleTrayTapped() {
+	go a.refresh()
 }
 
 func (a *App) onExit() {
