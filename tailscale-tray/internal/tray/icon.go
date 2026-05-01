@@ -29,13 +29,14 @@ var tailscaleDots = [...]iconDot{
 var tailscaleDotFill = color.NRGBA{R: 0xF3, G: 0xF4, B: 0xF6, A: 0xFF}
 
 func trayIcon() []byte {
-	// Render closer to common Linux tray icon sizes so the mark reads larger.
-	const size = 24
+	// Match the source icon size used by network-manager so tray hosts scale
+	// both plugins consistently, while keeping this mark close to the bounds.
+	const size = 16
 	const supersample = 8
 	const iconViewBox = 252.0
-	const canvasViewBox = 262.0
+	const canvasViewBox = 216.0
 	const iconOffset = (canvasViewBox - iconViewBox) / 2
-	const dotScale = 1.18
+	const dotScale = 1.4
 	const dotCenter = iconViewBox / 2
 
 	hiSize := size * supersample
