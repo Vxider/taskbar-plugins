@@ -1,6 +1,13 @@
 package modemctl
 
-import "testing"
+import (
+	"errors"
+	"reflect"
+	"testing"
+	"time"
+
+	"github.com/vxider/codex-buddy/uconsole/network-manager/internal/modemsysfs"
+)
 
 func TestDesiredTarget(t *testing.T) {
 	tests := []struct {
@@ -169,5 +176,66 @@ func TestSignalQualityFromCSQ(t *testing.T) {
 				t.Fatalf("signalQualityFromCSQ() = %q, want %q", got, tt.want)
 			}
 		})
+	}
+}
+
+func TestCandidateATPortsSkipsMissingDeviceNodes(t *testing.T) {
+	origDeviceNodeExists := deviceNodeExistsFunc
+	origFirstDevice := firstDeviceFunc
+	t.Cleanup(func() {
+		deviceNodeExistsFunc = origDeviceNodeExists
+		firstDeviceFunc = origFirstDevice
+	})
+
+	firstDeviceFunc = func() (modemsysfs.Device, bool) {
+		return modemsysfs.Device{ATTTYs: []string{"ttyUSB0", "ttyUSB2"}}, true
+	}
+	deviceNodeExistsFunc = func(path string) bool {
+		return path == "/dev/ttyUSB2"
+	}
+
+	got := candidateATPorts(State{PrimaryPort: "ttyUSB0"})
+	want := []string{"/dev/ttyUSB2"}
+	if !reflect.DeepEqual(got, want) {
+		t.Fatalf("candidateATPorts() = %#v, want %#v", got, want)
+	}
+}
+
+func TestFindResponsiveATPortSelectsWorkingCandidate(t *testing.T) {
+	origSend := sendATFunc
+	origDeviceNodeExists := deviceNodeExistsFunc
+	origFirstDevice := firstDeviceFunc
+	t.Cleanup(func() {
+		sendATFunc = origSend
+		deviceNodeExistsFunc = origDeviceNodeExists
+		firstDeviceFunc = origFirstDevice
+	})
+
+	firstDeviceFunc = func() (modemsysfs.Device, bool) {
+		return modemsysfs.Device{ATTTYs: []string{"ttyUSB0", "ttyUSB2"}}, true
+	}
+	deviceNodeExistsFunc = func(path string) bool {
+		return path == "/dev/ttyUSB0" || path == "/dev/ttyUSB2"
+	}
+	sendATFunc = func(path, command string, timeout time.Duration) (string, error) {
+		if command != "AT" {
+			t.Fatalf("sendAT command = %q, want AT", command)
+		}
+		switch path {
+		case "/dev/ttyUSB0":
+			return "", errors.New("wrong serial function")
+		case "/dev/ttyUSB2":
+			return "OK", nil
+		default:
+			return "", errors.New("unexpected port")
+		}
+	}
+
+	port, ok := findResponsiveATPort(State{PrimaryPort: "ttyUSB0"})
+	if !ok {
+		t.Fatalf("findResponsiveATPort() ok = false, want true")
+	}
+	if port != "ttyUSB2" {
+		t.Fatalf("findResponsiveATPort() port = %q, want ttyUSB2", port)
 	}
 }

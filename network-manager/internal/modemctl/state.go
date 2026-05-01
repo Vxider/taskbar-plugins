@@ -44,8 +44,11 @@ type State struct {
 }
 
 var (
-	runCommandFunc = runCommand
-	sleepFunc      = time.Sleep
+	runCommandFunc       = runCommand
+	sendATFunc           = sendAT
+	deviceNodeExistsFunc = deviceNodeExists
+	firstDeviceFunc      = modemsysfs.FirstDevice
+	sleepFunc            = time.Sleep
 )
 
 func Load(ctx context.Context) State {
@@ -133,7 +136,7 @@ func Load(ctx context.Context) State {
 }
 
 func ensureATDriver(ctx context.Context) error {
-	device, ok := modemsysfs.FirstDevice()
+	device, ok := firstDeviceFunc()
 	if !ok || len(device.ATTTYs) > 0 {
 		return nil
 	}
@@ -150,7 +153,7 @@ func ensureATDriver(ctx context.Context) error {
 
 	deadline := time.Now().Add(2 * time.Second)
 	for time.Now().Before(deadline) {
-		if device, ok := modemsysfs.FirstDevice(); ok && len(device.ATTTYs) > 0 {
+		if device, ok := firstDeviceFunc(); ok && len(device.ATTTYs) > 0 {
 			return nil
 		}
 		sleepFunc(150 * time.Millisecond)
@@ -179,26 +182,8 @@ func loadATSignalQuality(state *State) {
 		return
 	}
 
-	var candidates []string
-	if state.PrimaryPort != "" {
-		candidates = append(candidates, "/dev/"+state.PrimaryPort)
-	}
-	if device, ok := modemsysfs.FirstDevice(); ok {
-		for _, tty := range device.ATTTYs {
-			if strings.TrimSpace(tty) != "" {
-				candidates = append(candidates, "/dev/"+tty)
-			}
-		}
-	}
-
-	seen := make(map[string]struct{}, len(candidates))
-	for _, candidate := range candidates {
-		if _, ok := seen[candidate]; ok || candidate == "/dev/" {
-			continue
-		}
-		seen[candidate] = struct{}{}
-
-		response, err := sendAT(candidate, "AT+CSQ", 1200*time.Millisecond)
+	for _, candidate := range candidateATPorts(*state) {
+		response, err := sendATFunc(candidate, "AT+CSQ", 1200*time.Millisecond)
 		if err != nil {
 			continue
 		}
@@ -207,6 +192,48 @@ func loadATSignalQuality(state *State) {
 			return
 		}
 	}
+}
+
+func candidateATPorts(state State) []string {
+	var candidates []string
+	if state.PrimaryPort != "" {
+		candidates = append(candidates, "/dev/"+state.PrimaryPort)
+	}
+	if device, ok := firstDeviceFunc(); ok {
+		for _, tty := range device.ATTTYs {
+			if strings.TrimSpace(tty) != "" {
+				candidates = append(candidates, "/dev/"+tty)
+			}
+		}
+	}
+
+	seen := make(map[string]struct{}, len(candidates))
+	ports := make([]string, 0, len(candidates))
+	for _, candidate := range candidates {
+		if _, ok := seen[candidate]; ok || candidate == "/dev/" || !deviceNodeExistsFunc(candidate) {
+			continue
+		}
+		seen[candidate] = struct{}{}
+		ports = append(ports, candidate)
+	}
+	return ports
+}
+
+func findResponsiveATPort(state State) (string, bool) {
+	for _, candidate := range candidateATPorts(state) {
+		if _, err := sendATFunc(candidate, "AT", 700*time.Millisecond); err == nil {
+			return strings.TrimPrefix(candidate, "/dev/"), true
+		}
+	}
+	return "", false
+}
+
+func deviceNodeExists(path string) bool {
+	if strings.TrimSpace(path) == "" {
+		return false
+	}
+	info, err := os.Stat(path)
+	return err == nil && !info.IsDir()
 }
 
 func signalQualityFromCSQ(response string) (string, bool) {
@@ -417,17 +444,17 @@ func loadModemManagerState(ctx context.Context, state *State) {
 }
 
 func loadSysfsFallback(state *State) {
-	device, ok := modemsysfs.FirstDevice()
+	device, ok := firstDeviceFunc()
 	if !ok {
 		return
 	}
 
 	state.HardwarePresent = true
-	if device.ATTTY != "" {
+	if port, ok := findResponsiveATPort(*state); ok {
 		state.ATReady = true
-		if state.PrimaryPort == "" {
-			state.PrimaryPort = device.ATTTY
-		}
+		state.PrimaryPort = port
+	} else if state.PrimaryPort != "" && !deviceNodeExistsFunc("/dev/"+state.PrimaryPort) {
+		state.PrimaryPort = ""
 	}
 	if state.NetworkPort == "" {
 		state.NetworkPort = device.NetworkInterface
