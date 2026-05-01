@@ -48,6 +48,8 @@ var (
 	sendATFunc           = sendAT
 	deviceNodeExistsFunc = deviceNodeExists
 	firstDeviceFunc      = modemsysfs.FirstDevice
+	writeOptionNewIDFunc = writeOptionNewID
+	runBindHelperFunc    = runBindHelper
 	sleepFunc            = time.Sleep
 )
 
@@ -137,28 +139,49 @@ func Load(ctx context.Context) State {
 
 func ensureATDriver(ctx context.Context) error {
 	device, ok := firstDeviceFunc()
-	if !ok || len(device.ATTTYs) > 0 {
+	if !ok || hasUsableATDeviceNode(device) {
 		return nil
 	}
+	needsDeviceNodeRepair := len(device.ATTTYs) > 0
 
 	if err := runCommandFunc(ctx, "modprobe", "option"); err != nil {
-		if helperErr := runBindHelper(ctx); helperErr != nil {
+		if helperErr := runBindHelperFunc(ctx); helperErr != nil {
 			return err
 		}
-	} else if err := writeOptionNewID(); err != nil && !strings.Contains(err.Error(), "File exists") {
-		if helperErr := runBindHelper(ctx); helperErr != nil {
+	} else if err := writeOptionNewIDFunc(); err != nil && !strings.Contains(err.Error(), "File exists") {
+		if helperErr := runBindHelperFunc(ctx); helperErr != nil {
 			return err
+		}
+	}
+
+	if needsDeviceNodeRepair {
+		if device, ok := firstDeviceFunc(); ok && !hasUsableATDeviceNode(device) {
+			if err := runBindHelperFunc(ctx); err != nil {
+				return err
+			}
 		}
 	}
 
 	deadline := time.Now().Add(2 * time.Second)
 	for time.Now().Before(deadline) {
-		if device, ok := firstDeviceFunc(); ok && len(device.ATTTYs) > 0 {
+		if device, ok := firstDeviceFunc(); ok && hasUsableATDeviceNode(device) {
 			return nil
 		}
 		sleepFunc(150 * time.Millisecond)
 	}
 	return fmt.Errorf("timed out waiting for modem AT port")
+}
+
+func hasUsableATDeviceNode(device modemsysfs.Device) bool {
+	for _, tty := range device.ATTTYs {
+		if strings.TrimSpace(tty) == "" {
+			continue
+		}
+		if deviceNodeExistsFunc("/dev/" + tty) {
+			return true
+		}
+	}
+	return false
 }
 
 func writeOptionNewID() error {
@@ -233,7 +256,15 @@ func deviceNodeExists(path string) bool {
 		return false
 	}
 	info, err := os.Stat(path)
-	return err == nil && !info.IsDir()
+	if err != nil || info.IsDir() {
+		return false
+	}
+	fd, err := unix.Open(path, unix.O_RDWR|unix.O_NOCTTY, 0)
+	if err != nil {
+		return false
+	}
+	_ = unix.Close(fd)
+	return true
 }
 
 func signalQualityFromCSQ(response string) (string, bool) {

@@ -1,6 +1,7 @@
 package modemctl
 
 import (
+	"context"
 	"errors"
 	"reflect"
 	"testing"
@@ -198,6 +199,67 @@ func TestCandidateATPortsSkipsMissingDeviceNodes(t *testing.T) {
 	want := []string{"/dev/ttyUSB2"}
 	if !reflect.DeepEqual(got, want) {
 		t.Fatalf("candidateATPorts() = %#v, want %#v", got, want)
+	}
+}
+
+func TestHasUsableATDeviceNodeRequiresOpenableDevice(t *testing.T) {
+	origDeviceNodeExists := deviceNodeExistsFunc
+	t.Cleanup(func() {
+		deviceNodeExistsFunc = origDeviceNodeExists
+	})
+
+	deviceNodeExistsFunc = func(path string) bool {
+		return path == "/dev/ttyUSB2"
+	}
+
+	device := modemsysfs.Device{ATTTYs: []string{"ttyUSB0", "ttyUSB2"}}
+	if !hasUsableATDeviceNode(device) {
+		t.Fatalf("hasUsableATDeviceNode() = false, want true")
+	}
+}
+
+func TestEnsureATDriverRepairsMissingDeviceNodes(t *testing.T) {
+	origRunCommand := runCommandFunc
+	origWriteNewID := writeOptionNewIDFunc
+	origRunBindHelper := runBindHelperFunc
+	origDeviceNodeExists := deviceNodeExistsFunc
+	origFirstDevice := firstDeviceFunc
+	origSleep := sleepFunc
+	t.Cleanup(func() {
+		runCommandFunc = origRunCommand
+		writeOptionNewIDFunc = origWriteNewID
+		runBindHelperFunc = origRunBindHelper
+		deviceNodeExistsFunc = origDeviceNodeExists
+		firstDeviceFunc = origFirstDevice
+		sleepFunc = origSleep
+	})
+
+	firstDeviceFunc = func() (modemsysfs.Device, bool) {
+		return modemsysfs.Device{ATTTYs: []string{"ttyUSB0"}}, true
+	}
+	deviceNodeAvailable := false
+	deviceNodeExistsFunc = func(path string) bool {
+		return deviceNodeAvailable && path == "/dev/ttyUSB0"
+	}
+	runCommandFunc = func(_ context.Context, _ string, _ ...string) error {
+		return nil
+	}
+	writeOptionNewIDFunc = func() error {
+		return nil
+	}
+	runBindCalls := 0
+	runBindHelperFunc = func(_ context.Context) error {
+		runBindCalls++
+		deviceNodeAvailable = true
+		return nil
+	}
+	sleepFunc = func(time.Duration) {}
+
+	if err := ensureATDriver(nil); err != nil {
+		t.Fatalf("ensureATDriver() error = %v", err)
+	}
+	if runBindCalls != 1 {
+		t.Fatalf("runBindHelper calls = %d, want 1", runBindCalls)
 	}
 }
 

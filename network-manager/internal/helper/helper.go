@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"os"
 	"os/exec"
+	"strconv"
 	"strings"
 	"time"
 
@@ -15,10 +16,17 @@ import (
 var (
 	findATPortFunc  = findATPort
 	findATPortsFunc = findATPorts
+	firstDeviceFunc = modemsysfs.FirstDevice
 	sendATFunc      = sendAT
 	sleepFunc       = time.Sleep
 	runFunc         = run
 	writeNewIDFunc  = writeNewID
+	ensureNodesFunc = ensureATDeviceNodes
+	mknodFunc       = unix.Mknod
+	chmodFunc       = os.Chmod
+	chownFunc       = os.Chown
+	devRoot         = "/dev"
+	ttyClassRoot    = "/sys/class/tty"
 )
 
 func Run(args []string) error {
@@ -28,7 +36,8 @@ func Run(args []string) error {
 	if args[0] != "modem" {
 		return fmt.Errorf("unknown helper target: %s", args[0])
 	}
-	if strings.EqualFold(strings.TrimSpace(args[1]), "bind") {
+	switch strings.ToLower(strings.TrimSpace(args[1])) {
+	case "bind":
 		return ensureATDriver()
 	}
 
@@ -100,7 +109,7 @@ func ensureATDriver() error {
 	if err := writeNewIDFunc(); err != nil && !errors.Is(err, unix.EEXIST) {
 		return err
 	}
-	return nil
+	return ensureNodesFunc()
 }
 
 func sendATWithRetry(path, command string, attempts int, delay time.Duration) (string, error) {
@@ -201,7 +210,7 @@ func findATPort() string {
 }
 
 func findATPorts() []string {
-	device, ok := modemsysfs.FirstDevice()
+	device, ok := firstDeviceFunc()
 	if !ok {
 		return nil
 	}
@@ -219,6 +228,77 @@ func findATPorts() []string {
 		ports = append(ports, "/dev/"+tty)
 	}
 	return ports
+}
+
+func ensureATDeviceNodes() error {
+	device, ok := firstDeviceFunc()
+	if !ok {
+		return nil
+	}
+
+	var lastErr error
+	for _, tty := range device.ATTTYs {
+		if strings.TrimSpace(tty) == "" {
+			continue
+		}
+		if err := ensureTTYDeviceNode(tty); err != nil {
+			lastErr = err
+		}
+	}
+	return lastErr
+}
+
+func ensureTTYDeviceNode(tty string) error {
+	devPath := devRoot + "/" + tty
+
+	raw, err := os.ReadFile(ttyClassRoot + "/" + tty + "/dev")
+	if err != nil {
+		return err
+	}
+	major, minor, err := parseDeviceMajorMinor(string(raw))
+	if err != nil {
+		return err
+	}
+
+	dev := int(unix.Mkdev(uint32(major), uint32(minor)))
+	if _, err := os.Stat(devPath); err != nil {
+		if !errors.Is(err, os.ErrNotExist) {
+			return err
+		}
+		if err := mknodFunc(devPath, unix.S_IFCHR|0o600, dev); err != nil && !errors.Is(err, unix.EEXIST) && !errors.Is(err, os.ErrExist) {
+			return err
+		}
+	}
+	if uid, ok := pkexecUID(); ok {
+		if err := chownFunc(devPath, uid, -1); err != nil {
+			return err
+		}
+	}
+	return chmodFunc(devPath, 0o600)
+}
+
+func parseDeviceMajorMinor(raw string) (int, int, error) {
+	parts := strings.Split(strings.TrimSpace(raw), ":")
+	if len(parts) != 2 {
+		return 0, 0, fmt.Errorf("unexpected device number %q", strings.TrimSpace(raw))
+	}
+	major, err := strconv.Atoi(parts[0])
+	if err != nil {
+		return 0, 0, err
+	}
+	minor, err := strconv.Atoi(parts[1])
+	if err != nil {
+		return 0, 0, err
+	}
+	return major, minor, nil
+}
+
+func pkexecUID() (int, bool) {
+	uid, err := strconv.Atoi(strings.TrimSpace(os.Getenv("PKEXEC_UID")))
+	if err != nil || uid < 0 {
+		return 0, false
+	}
+	return uid, true
 }
 
 func run(name string, args ...string) error {
