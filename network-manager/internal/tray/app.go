@@ -663,12 +663,12 @@ func traySignalIcon(state modemctl.State, config configstate.State, systemWrites
 		return signalIconStandby, 0
 	}
 	if modemErrorForDisplay(state, config) != "" {
-		return signalIconBars, 0
+		return signalIconUnavailable, 0
 	}
 
 	bars, ok := signalBarsFromQuality(state.SignalQuality)
 	if !ok {
-		return signalIconBars, 0
+		return signalIconUnavailable, 0
 	}
 	return signalIconBars, bars
 }

@@ -83,6 +83,22 @@ func TestTraySignalIcon(t *testing.T) {
 			wantBars: 3,
 		},
 		{
+			name:     "onWithoutSignal",
+			config:   configstate.State{ModemMode: configstate.ModeOn},
+			writes:   true,
+			wantMode: signalIconUnavailable,
+		},
+		{
+			name: "onWithModemError",
+			state: modemctl.State{
+				Installed: true,
+				Error:     "mmcli reports no modems",
+			},
+			config:   configstate.State{ModemMode: configstate.ModeOn},
+			writes:   true,
+			wantMode: signalIconUnavailable,
+		},
+		{
 			name: "readOnlyAutoStandbyWithSignal",
 			state: modemctl.State{
 				AltNetConnected: true,
@@ -142,6 +158,21 @@ func TestTrayIconUsesBlueForActiveBars(t *testing.T) {
 	want := signalActiveColor()
 	if got != want {
 		t.Fatalf("active bar color = %#v, want %#v", got, want)
+	}
+}
+
+func TestTrayIconUnavailableHasNoSignalBarsAtLeft(t *testing.T) {
+	icon := trayIcon(color.NRGBA{R: 0x2D, G: 0x9A, B: 0x5F, A: 0xFF}, signalIconUnavailable, 4)
+	img, err := png.Decode(bytes.NewReader(icon))
+	if err != nil {
+		t.Fatalf("decode tray icon: %v", err)
+	}
+
+	if hasOpaquePixel(img, image.Rect(1, 4, 3, 14)) {
+		t.Fatal("unavailable icon unexpectedly drew signal bars in the left-most bar area")
+	}
+	if !hasOpaquePixel(img, image.Rect(3, 4, 13, 13)) {
+		t.Fatal("unavailable icon did not draw its mark")
 	}
 }
 
