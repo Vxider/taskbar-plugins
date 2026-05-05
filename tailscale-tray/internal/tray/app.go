@@ -215,7 +215,7 @@ func (a *App) applyExitNode(target string) {
 }
 
 func (a *App) render(state tailscalecli.State, busy bool) {
-	icon := trayIcon()
+	icon := trayIcon(state.Online)
 	systray.SetIcon(icon)
 	systray.SetTitle(trayTitle(state, busy))
 	systray.SetTooltip(trayTooltip(state, busy))

@@ -5,6 +5,7 @@ import (
 	"image"
 	"image/color"
 	"image/png"
+	"math"
 )
 
 type iconDot struct {
@@ -27,8 +28,9 @@ var tailscaleDots = [...]iconDot{
 }
 
 var tailscaleDotFill = color.NRGBA{R: 0xF3, G: 0xF4, B: 0xF6, A: 0xFF}
+var tailscaleOfflineMark = color.NRGBA{R: 0xE5, G: 0x3E, B: 0x3E, A: 0xFF}
 
-func trayIcon() []byte {
+func trayIcon(online bool) []byte {
 	// Match the source icon size used by network-manager so tray hosts scale
 	// both plugins consistently, while keeping this mark close to the bounds.
 	const size = 16
@@ -63,6 +65,10 @@ func trayIcon() []byte {
 				}
 			}
 		}
+	}
+
+	if !online {
+		drawOfflineSlash(img, tailscaleOfflineMark)
 	}
 
 	outImg := image.NewNRGBA(image.Rect(0, 0, size, size))
@@ -102,4 +108,42 @@ func trayIcon() []byte {
 		return nil
 	}
 	return out.Bytes()
+}
+
+func drawOfflineSlash(img *image.NRGBA, fill color.NRGBA) {
+	points := slashPoints(image.Rect(2, 2, 14, 14))
+	for _, point := range points {
+		for dy := -1; dy <= 1; dy++ {
+			for dx := -1; dx <= 1; dx++ {
+				x := point[0] + dx
+				y := point[1] + dy
+				if image.Pt(x, y).In(img.Bounds()) {
+					img.SetNRGBA(x, y, fill)
+				}
+			}
+		}
+	}
+}
+
+func slashPoints(rect image.Rectangle) [][2]int {
+	x0 := rect.Min.X
+	y0 := rect.Max.Y - 1
+	x1 := rect.Max.X - 1
+	y1 := rect.Min.Y
+
+	dx := x1 - x0
+	dy := y1 - y0
+	steps := int(math.Max(math.Abs(float64(dx)), math.Abs(float64(dy))))
+	if steps == 0 {
+		return [][2]int{{x0, y0}}
+	}
+
+	points := make([][2]int, 0, steps+1)
+	for i := 0; i <= steps; i++ {
+		t := float64(i) / float64(steps)
+		x := int(math.Round(float64(x0) + t*float64(dx)))
+		y := int(math.Round(float64(y0) + t*float64(dy)))
+		points = append(points, [2]int{x, y})
+	}
+	return points
 }
