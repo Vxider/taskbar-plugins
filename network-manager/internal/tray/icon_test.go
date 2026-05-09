@@ -161,18 +161,18 @@ func TestTrayIconUsesBlueForActiveBars(t *testing.T) {
 	}
 }
 
-func TestTrayIconUnavailableHasNoSignalBarsAtLeft(t *testing.T) {
+func TestTrayIconUnavailableShowsGrayBarsWithRedQuestionMark(t *testing.T) {
 	icon := trayIcon(color.NRGBA{R: 0x2D, G: 0x9A, B: 0x5F, A: 0xFF}, signalIconUnavailable, 4)
 	img, err := png.Decode(bytes.NewReader(icon))
 	if err != nil {
 		t.Fatalf("decode tray icon: %v", err)
 	}
 
-	if hasOpaquePixel(img, image.Rect(1, 4, 3, 14)) {
-		t.Fatal("unavailable icon unexpectedly drew signal bars in the left-most bar area")
+	if got := color.NRGBAModel.Convert(img.At(1, 14)).(color.NRGBA); got != signalInactiveColor() {
+		t.Fatalf("unavailable first bar color = %#v, want %#v", got, signalInactiveColor())
 	}
-	if !hasOpaquePixel(img, image.Rect(3, 4, 13, 13)) {
-		t.Fatal("unavailable icon did not draw its mark")
+	if got := color.NRGBAModel.Convert(img.At(7, 11)).(color.NRGBA); got != signalWarningColor() {
+		t.Fatalf("unavailable question mark color = %#v, want %#v", got, signalWarningColor())
 	}
 }
 

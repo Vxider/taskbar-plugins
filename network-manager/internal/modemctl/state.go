@@ -44,9 +44,11 @@ type State struct {
 }
 
 var (
+	runFunc              = run
 	runCommandFunc       = runCommand
 	sendATFunc           = sendAT
 	deviceNodeExistsFunc = deviceNodeExists
+	lookPathFunc         = exec.LookPath
 	firstDeviceFunc      = modemsysfs.FirstDevice
 	writeOptionNewIDFunc = writeOptionNewID
 	runBindHelperFunc    = runBindHelper
@@ -59,16 +61,16 @@ func Load(ctx context.Context) State {
 	loadModemManagerState(ctx, &state)
 	loadSysfsFallback(&state)
 
-	if _, err := exec.LookPath("nmcli"); err == nil {
+	if _, err := lookPathFunc("nmcli"); err == nil {
 		loadNMCLIState(ctx, &state)
 	}
 
-	if _, err := exec.LookPath("mmcli"); err != nil {
+	if _, err := lookPathFunc("mmcli"); err != nil {
 		return state
 	}
 	state.Installed = true
 
-	listRaw, err := run(ctx, "mmcli", "-L")
+	listRaw, err := runFunc(ctx, "mmcli", "-L")
 	if err != nil {
 		state.Error = err.Error()
 		return state
@@ -80,7 +82,7 @@ func Load(ctx context.Context) State {
 			if state.HardwarePresent {
 				if bindErr := ensureATDriver(ctx); bindErr == nil {
 					loadSysfsFallback(&state)
-					if retryRaw, retryErr := run(ctx, "mmcli", "-L"); retryErr == nil {
+					if retryRaw, retryErr := runFunc(ctx, "mmcli", "-L"); retryErr == nil {
 						listRaw = retryRaw
 						modemID = parseFirstModemID(string(listRaw))
 					}
@@ -106,7 +108,7 @@ func Load(ctx context.Context) State {
 		return state
 	}
 
-	raw, err := run(ctx, "mmcli", "-m", modemID, "-K")
+	raw, err := runFunc(ctx, "mmcli", "-m", modemID, "-K")
 	if err != nil {
 		state.Error = err.Error()
 		return state
@@ -123,6 +125,9 @@ func Load(ctx context.Context) State {
 	state.RegistrationState = values["modem.3gpp.registration-state"]
 	state.PacketServiceState = values["modem.3gpp.packet-service-state"]
 	state.SignalQuality = values["modem.generic.signal-quality.value"]
+	if strings.EqualFold(values["modem.generic.signal-quality.recent"], "no") {
+		state.SignalQuality = ""
+	}
 
 	for key, value := range values {
 		if !strings.HasPrefix(key, "modem.generic.ports.value[") {
@@ -133,8 +138,27 @@ func Load(ctx context.Context) State {
 		}
 	}
 
-	loadATSignalQuality(&state)
+	if strings.TrimSpace(state.SignalQuality) == "" {
+		loadMMSignalQuality(ctx, modemID, &state)
+	}
 	return state
+}
+
+func loadMMSignalQuality(ctx context.Context, modemID string, state *State) {
+	raw, err := runFunc(ctx, "mmcli", "-m", modemID, "--signal-get", "-K")
+	if err != nil {
+		return
+	}
+
+	values := parseKeyValue(raw)
+	if quality, ok := signalQualityFromMMSignal(values); ok {
+		state.SignalQuality = quality
+		return
+	}
+
+	if strings.TrimSpace(values["modem.signal.refresh.rate"]) == "0" {
+		_ = runCommandFunc(ctx, "mmcli", "-m", modemID, "--signal-setup=5")
+	}
 }
 
 func ensureATDriver(ctx context.Context) error {
@@ -285,6 +309,60 @@ func signalQualityFromCSQ(response string) (string, bool) {
 	return strconv.Itoa(quality), true
 }
 
+func signalQualityFromMMSignal(values map[string]string) (string, bool) {
+	if quality, ok := signalQualityFromRSRP(values["modem.signal.lte.rsrp"]); ok {
+		return quality, true
+	}
+	if quality, ok := signalQualityFromRSSI(values["modem.signal.lte.rssi"]); ok {
+		return quality, true
+	}
+	if quality, ok := signalQualityFromRSSI(values["modem.signal.gsm.rssi"]); ok {
+		return quality, true
+	}
+	if quality, ok := signalQualityFromRSSI(values["modem.signal.umts.rssi"]); ok {
+		return quality, true
+	}
+	return "", false
+}
+
+func signalQualityFromRSRP(raw string) (string, bool) {
+	rsrp, ok := parseSignalFloat(raw)
+	if !ok {
+		return "", false
+	}
+	return strconv.Itoa(clampPercent(int((rsrp + 120) * 100 / 40))), true
+}
+
+func signalQualityFromRSSI(raw string) (string, bool) {
+	rssi, ok := parseSignalFloat(raw)
+	if !ok {
+		return "", false
+	}
+	return strconv.Itoa(clampPercent(int((rssi + 113) * 100 / 62))), true
+}
+
+func parseSignalFloat(raw string) (float64, bool) {
+	raw = strings.TrimSpace(raw)
+	if raw == "" || raw == "--" {
+		return 0, false
+	}
+	value, err := strconv.ParseFloat(raw, 64)
+	if err != nil {
+		return 0, false
+	}
+	return value, true
+}
+
+func clampPercent(value int) int {
+	if value < 0 {
+		return 0
+	}
+	if value > 100 {
+		return 100
+	}
+	return value
+}
+
 func sendAT(path, command string, timeout time.Duration) (string, error) {
 	fd, err := unix.Open(path, unix.O_RDWR|unix.O_NOCTTY, 0)
 	if err != nil {
@@ -394,7 +472,7 @@ func DesiredTarget(mode string, wifiConnected bool) string {
 }
 
 func loadNMCLIState(ctx context.Context, state *State) {
-	raw, err := run(ctx, "nmcli", "-t", "-f", "DEVICE,TYPE,STATE,CONNECTION", "device", "status")
+	raw, err := runFunc(ctx, "nmcli", "-t", "-f", "DEVICE,TYPE,STATE,CONNECTION", "device", "status")
 	if err != nil {
 		return
 	}
@@ -465,7 +543,7 @@ func isModemNetworkDevice(state State, device string) bool {
 }
 
 func loadModemManagerState(ctx context.Context, state *State) {
-	if _, err := exec.LookPath("systemctl"); err != nil {
+	if _, err := lookPathFunc("systemctl"); err != nil {
 		return
 	}
 	cmd := exec.CommandContext(ctx, "systemctl", "is-active", "--quiet", "ModemManager")

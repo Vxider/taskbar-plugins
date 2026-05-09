@@ -3,7 +3,9 @@ package modemctl
 import (
 	"context"
 	"errors"
+	"os/exec"
 	"reflect"
+	"strings"
 	"testing"
 	"time"
 
@@ -177,6 +179,201 @@ func TestSignalQualityFromCSQ(t *testing.T) {
 				t.Fatalf("signalQualityFromCSQ() = %q, want %q", got, tt.want)
 			}
 		})
+	}
+}
+
+func TestLoadDoesNotProbeATWhenMMSeesModemButSignalIsUnavailable(t *testing.T) {
+	origRun := runFunc
+	origSend := sendATFunc
+	origDeviceNodeExists := deviceNodeExistsFunc
+	origLookPath := lookPathFunc
+	origFirstDevice := firstDeviceFunc
+	t.Cleanup(func() {
+		runFunc = origRun
+		sendATFunc = origSend
+		deviceNodeExistsFunc = origDeviceNodeExists
+		lookPathFunc = origLookPath
+		firstDeviceFunc = origFirstDevice
+	})
+
+	lookPathFunc = func(name string) (string, error) {
+		switch name {
+		case "mmcli":
+			return "/usr/bin/mmcli", nil
+		default:
+			return "", exec.ErrNotFound
+		}
+	}
+	runFunc = func(_ context.Context, name string, args ...string) ([]byte, error) {
+		if name != "mmcli" {
+			return nil, errors.New("unexpected command")
+		}
+		if reflect.DeepEqual(args, []string{"-L"}) {
+			return []byte("/org/freedesktop/ModemManager1/Modem/0 [CMCC] ML307C"), nil
+		}
+		if reflect.DeepEqual(args, []string{"-m", "0", "-K"}) {
+			return []byte(strings.Join([]string{
+				"modem.generic.primary-port: ttyUSB2",
+				"modem.generic.state: registered",
+				"modem.generic.signal-quality.value: 0",
+				"modem.generic.signal-quality.recent: no",
+				"modem.3gpp.registration-state: home",
+				"modem.3gpp.packet-service-state: attached",
+			}, "\n")), nil
+		}
+		if reflect.DeepEqual(args, []string{"-m", "0", "--signal-get", "-K"}) {
+			return []byte("modem.signal.lte.rsrp: --\nmodem.signal.gsm.rssi: --\n"), nil
+		}
+		return nil, errors.New("unexpected mmcli args")
+	}
+	firstDeviceFunc = func() (modemsysfs.Device, bool) {
+		return modemsysfs.Device{ATTTYs: []string{"ttyUSB2"}}, true
+	}
+	deviceNodeExistsFunc = func(path string) bool {
+		return path == "/dev/ttyUSB2"
+	}
+	sendATFunc = func(path, command string, timeout time.Duration) (string, error) {
+		if command == "AT" {
+			return "\r\nOK\r\n", nil
+		}
+		t.Fatalf("sendATFunc command = %q, want no signal AT probe", command)
+		return "", nil
+	}
+
+	state := Load(context.Background())
+	if state.SignalQuality != "" {
+		t.Fatalf("SignalQuality = %q, want empty", state.SignalQuality)
+	}
+}
+
+func TestLoadUsesATSignalOnlyWhenMMDoesNotSeeHardwareModem(t *testing.T) {
+	origRun := runFunc
+	origRunCommand := runCommandFunc
+	origSend := sendATFunc
+	origDeviceNodeExists := deviceNodeExistsFunc
+	origLookPath := lookPathFunc
+	origFirstDevice := firstDeviceFunc
+	t.Cleanup(func() {
+		runFunc = origRun
+		runCommandFunc = origRunCommand
+		sendATFunc = origSend
+		deviceNodeExistsFunc = origDeviceNodeExists
+		lookPathFunc = origLookPath
+		firstDeviceFunc = origFirstDevice
+	})
+
+	lookPathFunc = func(name string) (string, error) {
+		switch name {
+		case "mmcli":
+			return "/usr/bin/mmcli", nil
+		default:
+			return "", exec.ErrNotFound
+		}
+	}
+	runFunc = func(_ context.Context, name string, args ...string) ([]byte, error) {
+		if name == "mmcli" && reflect.DeepEqual(args, []string{"-L"}) {
+			return []byte("No modems were found"), nil
+		}
+		return nil, errors.New("unexpected command")
+	}
+	runCommandFunc = func(_ context.Context, _ string, _ ...string) error {
+		return nil
+	}
+	firstDeviceFunc = func() (modemsysfs.Device, bool) {
+		return modemsysfs.Device{ATTTYs: []string{"ttyUSB2"}, NetworkInterface: "eth1"}, true
+	}
+	deviceNodeExistsFunc = func(path string) bool {
+		return path == "/dev/ttyUSB2"
+	}
+	sendATFunc = func(path, command string, timeout time.Duration) (string, error) {
+		switch command {
+		case "AT":
+			return "\r\nOK\r\n", nil
+		case "AT+CSQ":
+			return "\r\n+CSQ: 20,99\r\n\r\nOK\r\n", nil
+		default:
+			t.Fatalf("sendATFunc command = %q, want AT or AT+CSQ", command)
+		}
+		return "", nil
+	}
+
+	state := Load(context.Background())
+	if state.SignalQuality != "64" {
+		t.Fatalf("SignalQuality = %q, want 64", state.SignalQuality)
+	}
+}
+
+func TestLoadUsesMMSignalWhenGenericSignalQualityIsStale(t *testing.T) {
+	origRun := runFunc
+	origRunCommand := runCommandFunc
+	origSend := sendATFunc
+	origDeviceNodeExists := deviceNodeExistsFunc
+	origLookPath := lookPathFunc
+	origFirstDevice := firstDeviceFunc
+	t.Cleanup(func() {
+		runFunc = origRun
+		runCommandFunc = origRunCommand
+		sendATFunc = origSend
+		deviceNodeExistsFunc = origDeviceNodeExists
+		lookPathFunc = origLookPath
+		firstDeviceFunc = origFirstDevice
+	})
+
+	lookPathFunc = func(name string) (string, error) {
+		switch name {
+		case "mmcli":
+			return "/usr/bin/mmcli", nil
+		default:
+			return "", exec.ErrNotFound
+		}
+	}
+	runFunc = func(_ context.Context, name string, args ...string) ([]byte, error) {
+		if name != "mmcli" {
+			return nil, errors.New("unexpected command")
+		}
+		if reflect.DeepEqual(args, []string{"-L"}) {
+			return []byte("/org/freedesktop/ModemManager1/Modem/0 [CMCC] ML307C"), nil
+		}
+		if reflect.DeepEqual(args, []string{"-m", "0", "-K"}) {
+			return []byte(strings.Join([]string{
+				"modem.generic.primary-port: ttyUSB2",
+				"modem.generic.state: registered",
+				"modem.generic.signal-quality.value: 0",
+				"modem.generic.signal-quality.recent: no",
+				"modem.3gpp.registration-state: home",
+				"modem.3gpp.packet-service-state: attached",
+			}, "\n")), nil
+		}
+		if reflect.DeepEqual(args, []string{"-m", "0", "--signal-get", "-K"}) {
+			return []byte(strings.Join([]string{
+				"modem.signal.refresh.rate: 5",
+				"modem.signal.gsm.rssi: -79.00",
+				"modem.signal.lte.rsrp: -96.00",
+			}, "\n")), nil
+		}
+		return nil, errors.New("unexpected mmcli args")
+	}
+	runCommandFunc = func(_ context.Context, _ string, _ ...string) error {
+		t.Fatal("runCommandFunc should not be called when mmcli signal data is present")
+		return nil
+	}
+	firstDeviceFunc = func() (modemsysfs.Device, bool) {
+		return modemsysfs.Device{ATTTYs: []string{"ttyUSB2"}}, true
+	}
+	deviceNodeExistsFunc = func(path string) bool {
+		return path == "/dev/ttyUSB2"
+	}
+	sendATFunc = func(path, command string, timeout time.Duration) (string, error) {
+		if command == "AT" {
+			return "\r\nOK\r\n", nil
+		}
+		t.Fatal("sendATFunc should not be called for signal quality when mmcli signal data is present")
+		return "", nil
+	}
+
+	state := Load(context.Background())
+	if state.SignalQuality != "60" {
+		t.Fatalf("SignalQuality = %q, want 60", state.SignalQuality)
 	}
 }
 

@@ -33,7 +33,8 @@ func trayIcon(fill color.NRGBA, mode signalIconMode, bars int) []byte {
 	case signalIconStandby:
 		drawSignalBars(img, 1, 14, 0, active, inactive)
 	case signalIconUnavailable:
-		drawUnavailableMark(img, inactive)
+		drawSignalBars(img, 1, 14, 0, active, inactive)
+		drawQuestionMark(img, signalWarningColor())
 	default:
 		drawSignalBars(img, 1, 14, bars, active, inactive)
 	}
@@ -51,6 +52,10 @@ func signalActiveColor() color.NRGBA {
 
 func signalInactiveColor() color.NRGBA {
 	return color.NRGBA{R: 0x7A, G: 0x7A, B: 0x7A, A: 0xFF}
+}
+
+func signalWarningColor() color.NRGBA {
+	return color.NRGBA{R: 0xD6, G: 0x32, B: 0x32, A: 0xFF}
 }
 
 func drawSignalBars(img *image.NRGBA, x0, baseline, bars int, active, inactive color.NRGBA) {
@@ -93,15 +98,18 @@ func drawOffMark(img *image.NRGBA, fill color.NRGBA) {
 	}
 }
 
-func drawUnavailableMark(img *image.NRGBA, fill color.NRGBA) {
+func drawQuestionMark(img *image.NRGBA, fill color.NRGBA) {
 	points := [][2]int{
-		{3, 4}, {4, 4}, {5, 4}, {6, 4},
-		{6, 5}, {6, 6},
-		{5, 7}, {4, 8}, {4, 9},
-		{4, 12},
-		{9, 4}, {9, 5}, {9, 6}, {9, 7}, {9, 8}, {9, 9}, {9, 10}, {9, 11}, {9, 12},
-		{12, 4}, {12, 5}, {12, 6}, {12, 7}, {12, 8}, {12, 9}, {12, 10}, {12, 11}, {12, 12},
-		{10, 4}, {11, 4}, {10, 8}, {11, 8}, {10, 12}, {11, 12},
+		{5, 1}, {6, 1}, {7, 1}, {8, 1}, {9, 1},
+		{4, 2}, {5, 2}, {9, 2}, {10, 2},
+		{4, 3}, {10, 3},
+		{9, 4}, {10, 4},
+		{8, 5}, {9, 5},
+		{7, 6}, {8, 6},
+		{6, 7}, {7, 7},
+		{6, 8}, {7, 8},
+		{6, 11}, {7, 11},
+		{6, 12}, {7, 12},
 	}
 	for _, point := range points {
 		img.SetNRGBA(point[0], point[1], fill)
