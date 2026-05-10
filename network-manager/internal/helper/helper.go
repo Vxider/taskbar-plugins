@@ -24,7 +24,6 @@ var (
 	ensureNodesFunc = ensureATDeviceNodes
 	mknodFunc       = unix.Mknod
 	chmodFunc       = os.Chmod
-	chownFunc       = os.Chown
 	devRoot         = "/dev"
 	ttyClassRoot    = "/sys/class/tty"
 )
@@ -265,16 +264,11 @@ func ensureTTYDeviceNode(tty string) error {
 		if !errors.Is(err, os.ErrNotExist) {
 			return err
 		}
-		if err := mknodFunc(devPath, unix.S_IFCHR|0o600, dev); err != nil && !errors.Is(err, unix.EEXIST) && !errors.Is(err, os.ErrExist) {
+		if err := mknodFunc(devPath, unix.S_IFCHR|0o660, dev); err != nil && !errors.Is(err, unix.EEXIST) && !errors.Is(err, os.ErrExist) {
 			return err
 		}
 	}
-	if uid, ok := pkexecUID(); ok {
-		if err := chownFunc(devPath, uid, -1); err != nil {
-			return err
-		}
-	}
-	return chmodFunc(devPath, 0o600)
+	return chmodFunc(devPath, 0o660)
 }
 
 func parseDeviceMajorMinor(raw string) (int, int, error) {
@@ -291,14 +285,6 @@ func parseDeviceMajorMinor(raw string) (int, int, error) {
 		return 0, 0, err
 	}
 	return major, minor, nil
-}
-
-func pkexecUID() (int, bool) {
-	uid, err := strconv.Atoi(strings.TrimSpace(os.Getenv("PKEXEC_UID")))
-	if err != nil || uid < 0 {
-		return 0, false
-	}
-	return uid, true
 }
 
 func run(name string, args ...string) error {

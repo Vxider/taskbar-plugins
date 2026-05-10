@@ -218,21 +218,13 @@ func TestParseDeviceMajorMinor(t *testing.T) {
 func TestEnsureTTYDeviceNodeCreatesMissingNode(t *testing.T) {
 	origMknod := mknodFunc
 	origChmod := chmodFunc
-	origChown := chownFunc
 	origDevRoot := devRoot
 	origTTYClassRoot := ttyClassRoot
-	origPKEXECUID, hadPKEXECUID := os.LookupEnv("PKEXEC_UID")
 	t.Cleanup(func() {
 		mknodFunc = origMknod
 		chmodFunc = origChmod
-		chownFunc = origChown
 		devRoot = origDevRoot
 		ttyClassRoot = origTTYClassRoot
-		if hadPKEXECUID {
-			_ = os.Setenv("PKEXEC_UID", origPKEXECUID)
-		} else {
-			_ = os.Unsetenv("PKEXEC_UID")
-		}
 	})
 
 	root := t.TempDir()
@@ -241,27 +233,15 @@ func TestEnsureTTYDeviceNodeCreatesMissingNode(t *testing.T) {
 	mustMkdirAll(t, devRoot)
 	mustMkdirAll(t, filepath.Join(ttyClassRoot, "ttyUSB2"))
 	mustWriteFile(t, filepath.Join(ttyClassRoot, "ttyUSB2", "dev"), "188:2\n")
-	_ = os.Setenv("PKEXEC_UID", "1000")
 
 	var gotPath string
 	var gotMode uint32
 	var gotDev int
-	var gotUID int
 	var chmodMode os.FileMode
 	mknodFunc = func(path string, mode uint32, dev int) error {
 		gotPath = path
 		gotMode = mode
 		gotDev = dev
-		return nil
-	}
-	chownFunc = func(path string, uid, gid int) error {
-		if path != filepath.Join(devRoot, "ttyUSB2") {
-			t.Fatalf("chown path = %q, want %q", path, filepath.Join(devRoot, "ttyUSB2"))
-		}
-		gotUID = uid
-		if gid != -1 {
-			t.Fatalf("chown gid = %d, want -1", gid)
-		}
 		return nil
 	}
 	chmodFunc = func(path string, mode os.FileMode) error {
@@ -278,38 +258,27 @@ func TestEnsureTTYDeviceNodeCreatesMissingNode(t *testing.T) {
 	if gotPath != filepath.Join(devRoot, "ttyUSB2") {
 		t.Fatalf("mknod path = %q, want %q", gotPath, filepath.Join(devRoot, "ttyUSB2"))
 	}
-	if gotMode != unix.S_IFCHR|0o600 {
-		t.Fatalf("mknod mode = %#o, want %#o", gotMode, unix.S_IFCHR|0o600)
+	if gotMode != unix.S_IFCHR|0o660 {
+		t.Fatalf("mknod mode = %#o, want %#o", gotMode, unix.S_IFCHR|0o660)
 	}
 	if gotDev != int(unix.Mkdev(188, 2)) {
 		t.Fatalf("mknod dev = %d, want %d", gotDev, int(unix.Mkdev(188, 2)))
 	}
-	if gotUID != 1000 {
-		t.Fatalf("chown uid = %d, want 1000", gotUID)
-	}
-	if chmodMode != 0o600 {
-		t.Fatalf("chmod mode = %#o, want 0600", chmodMode)
+	if chmodMode != 0o660 {
+		t.Fatalf("chmod mode = %#o, want 0660", chmodMode)
 	}
 }
 
 func TestEnsureTTYDeviceNodeRepairsExistingNodePermissions(t *testing.T) {
 	origMknod := mknodFunc
 	origChmod := chmodFunc
-	origChown := chownFunc
 	origDevRoot := devRoot
 	origTTYClassRoot := ttyClassRoot
-	origPKEXECUID, hadPKEXECUID := os.LookupEnv("PKEXEC_UID")
 	t.Cleanup(func() {
 		mknodFunc = origMknod
 		chmodFunc = origChmod
-		chownFunc = origChown
 		devRoot = origDevRoot
 		ttyClassRoot = origTTYClassRoot
-		if hadPKEXECUID {
-			_ = os.Setenv("PKEXEC_UID", origPKEXECUID)
-		} else {
-			_ = os.Unsetenv("PKEXEC_UID")
-		}
 	})
 
 	root := t.TempDir()
@@ -318,31 +287,27 @@ func TestEnsureTTYDeviceNodeRepairsExistingNodePermissions(t *testing.T) {
 	mustMkdirAll(t, devRoot)
 	mustWriteFile(t, filepath.Join(devRoot, "ttyUSB2"), "")
 	mustWriteFile(t, filepath.Join(ttyClassRoot, "ttyUSB2", "dev"), "188:2\n")
-	_ = os.Setenv("PKEXEC_UID", "1000")
 
 	mknodFunc = func(path string, mode uint32, dev int) error {
 		t.Fatalf("mknod should not be called for existing node")
 		return nil
 	}
-	chownCalled := false
-	chownFunc = func(path string, uid, gid int) error {
-		chownCalled = true
-		return nil
-	}
 	chmodCalled := false
+	var chmodMode os.FileMode
 	chmodFunc = func(path string, mode os.FileMode) error {
 		chmodCalled = true
+		chmodMode = mode
 		return nil
 	}
 
 	if err := ensureTTYDeviceNode("ttyUSB2"); err != nil {
 		t.Fatalf("ensureTTYDeviceNode() error = %v", err)
 	}
-	if !chownCalled {
-		t.Fatalf("chown was not called")
-	}
 	if !chmodCalled {
 		t.Fatalf("chmod was not called")
+	}
+	if chmodMode != 0o660 {
+		t.Fatalf("chmod mode = %#o, want 0660", chmodMode)
 	}
 }
 

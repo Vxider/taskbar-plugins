@@ -148,7 +148,7 @@ PartOf=graphical-session.target
 
 [Service]
 ExecStart=${INSTALL_PATH} --replace-existing
-Restart=always
+Restart=on-failure
 RestartSec=2
 Environment=DISPLAY=:0
 Environment=WAYLAND_DISPLAY=wayland-0

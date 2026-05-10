@@ -110,10 +110,14 @@ func acquireSingleInstance(logger *log.Logger, replaceExisting bool) bool {
 					logger.Printf("replace-existing: terminate pid=%d failed: %v", pid, killErr)
 				}
 			}
-			if waitForLock(file, 3*time.Second) == nil {
-				if err := file.Truncate(0); err == nil {
-					_, _ = file.WriteString(fmt.Sprintf("%d\n", os.Getpid()))
+			if waitForLock(file, 3*time.Second) != nil && pid > 0 && pid != os.Getpid() {
+				logger.Printf("replace-existing: prior instance pid=%d did not exit after SIGTERM; killing", pid)
+				if killErr := syscall.Kill(pid, syscall.SIGKILL); killErr != nil && killErr != syscall.ESRCH {
+					logger.Printf("replace-existing: kill pid=%d failed: %v", pid, killErr)
 				}
+			}
+			if waitForLock(file, 2*time.Second) == nil {
+				writeLockedPID(file)
 				instanceLockFile = file
 				return true
 			}
@@ -124,9 +128,7 @@ func acquireSingleInstance(logger *log.Logger, replaceExisting bool) bool {
 		return false
 	}
 
-	if err := file.Truncate(0); err == nil {
-		_, _ = file.WriteString(fmt.Sprintf("%d\n", os.Getpid()))
-	}
+	writeLockedPID(file)
 	instanceLockFile = file
 	return true
 }
@@ -139,11 +141,30 @@ func readLockedPID(file *os.File) int {
 	if err != nil {
 		return 0
 	}
-	pid, err := strconv.Atoi(strings.TrimSpace(string(data)))
-	if err != nil || pid <= 0 {
-		return 0
+	for i := len(data) - 1; i >= 0; i-- {
+		if data[i] < '0' || data[i] > '9' {
+			continue
+		}
+		end := i + 1
+		for i >= 0 && data[i] >= '0' && data[i] <= '9' {
+			i--
+		}
+		pid, err := strconv.Atoi(string(data[i+1 : end]))
+		if err == nil && pid > 0 {
+			return pid
+		}
 	}
-	return pid
+	return 0
+}
+
+func writeLockedPID(file *os.File) {
+	if err := file.Truncate(0); err != nil {
+		return
+	}
+	if _, err := file.Seek(0, 0); err != nil {
+		return
+	}
+	_, _ = file.WriteString(fmt.Sprintf("%d\n", os.Getpid()))
 }
 
 func waitForLock(file *os.File, timeout time.Duration) error {
