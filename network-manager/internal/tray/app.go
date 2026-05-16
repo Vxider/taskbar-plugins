@@ -649,6 +649,10 @@ func compactError(message string) string {
 }
 
 func traySignalIcon(state modemctl.State, config configstate.State, systemWritesEnabled bool) (signalIconMode, int) {
+	if state.WWANRadioKnown && !state.WWANRadioEnabled {
+		return signalIconRadioDisabled, 0
+	}
+
 	if !systemWritesEnabled {
 		if bars, ok := signalBarsFromQuality(state.SignalQuality); ok {
 			return signalIconBars, bars

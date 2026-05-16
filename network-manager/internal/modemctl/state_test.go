@@ -76,6 +76,42 @@ func TestAlternativeNetworkType(t *testing.T) {
 	}
 }
 
+func TestLoadWWANRadioState(t *testing.T) {
+	tests := []struct {
+		name        string
+		output      string
+		wantKnown   bool
+		wantEnabled bool
+	}{
+		{name: "enabled", output: "enabled\n", wantKnown: true, wantEnabled: true},
+		{name: "disabled", output: "disabled\n", wantKnown: true, wantEnabled: false},
+		{name: "chineseDisabled", output: "已禁用\n", wantKnown: true, wantEnabled: false},
+		{name: "unknown", output: "unexpected\n", wantKnown: false, wantEnabled: false},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			origRun := runFunc
+			t.Cleanup(func() {
+				runFunc = origRun
+			})
+
+			runFunc = func(_ context.Context, name string, args ...string) ([]byte, error) {
+				if name != "nmcli" || !reflect.DeepEqual(args, []string{"radio", "wwan"}) {
+					return nil, errors.New("unexpected command")
+				}
+				return []byte(tt.output), nil
+			}
+
+			var state State
+			loadWWANRadioState(context.Background(), &state)
+			if state.WWANRadioKnown != tt.wantKnown || state.WWANRadioEnabled != tt.wantEnabled {
+				t.Fatalf("WWAN radio = (known=%t enabled=%t), want (known=%t enabled=%t)", state.WWANRadioKnown, state.WWANRadioEnabled, tt.wantKnown, tt.wantEnabled)
+			}
+		})
+	}
+}
+
 func TestIsModemNetworkDevice(t *testing.T) {
 	state := State{NetworkPort: "eth1"}
 

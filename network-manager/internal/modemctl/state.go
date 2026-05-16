@@ -36,6 +36,8 @@ type State struct {
 	WiFiDevice         string
 	WiFiConnection     string
 	WiFiState          string
+	WWANRadioKnown     bool
+	WWANRadioEnabled   bool
 	AltNetConnected    bool
 	AltNetDevice       string
 	AltNetType         string
@@ -472,6 +474,8 @@ func DesiredTarget(mode string, wifiConnected bool) string {
 }
 
 func loadNMCLIState(ctx context.Context, state *State) {
+	loadWWANRadioState(ctx, state)
+
 	raw, err := runFunc(ctx, "nmcli", "-t", "-f", "DEVICE,TYPE,STATE,CONNECTION", "device", "status")
 	if err != nil {
 		return
@@ -512,6 +516,22 @@ func loadNMCLIState(ctx context.Context, state *State) {
 			state.AltNetState = deviceState
 			return
 		}
+	}
+}
+
+func loadWWANRadioState(ctx context.Context, state *State) {
+	raw, err := runFunc(ctx, "nmcli", "radio", "wwan")
+	if err != nil {
+		return
+	}
+
+	switch strings.ToLower(strings.TrimSpace(string(raw))) {
+	case "enabled", "on", "yes", "已启用", "开启", "开":
+		state.WWANRadioKnown = true
+		state.WWANRadioEnabled = true
+	case "disabled", "off", "no", "已禁用", "关闭", "关":
+		state.WWANRadioKnown = true
+		state.WWANRadioEnabled = false
 	}
 }
 

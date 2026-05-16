@@ -99,6 +99,28 @@ func TestTraySignalIcon(t *testing.T) {
 			wantMode: signalIconUnavailable,
 		},
 		{
+			name: "wwanRadioDisabled",
+			state: modemctl.State{
+				WWANRadioKnown:   true,
+				WWANRadioEnabled: false,
+				SignalQuality:    "74",
+			},
+			config:   configstate.State{ModemMode: configstate.ModeOn},
+			writes:   true,
+			wantMode: signalIconRadioDisabled,
+		},
+		{
+			name: "readOnlyWWANRadioDisabled",
+			state: modemctl.State{
+				WWANRadioKnown:   true,
+				WWANRadioEnabled: false,
+				SignalQuality:    "74",
+			},
+			config:   configstate.State{ModemMode: configstate.ModeOn},
+			writes:   false,
+			wantMode: signalIconRadioDisabled,
+		},
+		{
 			name: "readOnlyAutoStandbyWithSignal",
 			state: modemctl.State{
 				AltNetConnected: true,
@@ -118,6 +140,24 @@ func TestTraySignalIcon(t *testing.T) {
 				t.Fatalf("traySignalIcon() = (%v, %d), want (%v, %d)", gotMode, gotBars, tt.wantMode, tt.wantBars)
 			}
 		})
+	}
+}
+
+func TestTrayIconRadioDisabledShowsRedSlash(t *testing.T) {
+	icon := trayIcon(color.NRGBA{R: 0x2D, G: 0x9A, B: 0x5F, A: 0xFF}, signalIconRadioDisabled, 4)
+	img, err := png.Decode(bytes.NewReader(icon))
+	if err != nil {
+		t.Fatalf("decode tray icon: %v", err)
+	}
+
+	if got := color.NRGBAModel.Convert(img.At(1, 14)).(color.NRGBA); got != signalInactiveColor() {
+		t.Fatalf("radio disabled first bar color = %#v, want %#v", got, signalInactiveColor())
+	}
+	if got := color.NRGBAModel.Convert(img.At(8, 8)).(color.NRGBA); got != signalRadioDisabledColor() {
+		t.Fatalf("radio disabled slash color = %#v, want %#v", got, signalRadioDisabledColor())
+	}
+	if got := color.NRGBAModel.Convert(img.At(9, 8)).(color.NRGBA); got != signalRadioDisabledColor() {
+		t.Fatalf("radio disabled slash edge color = %#v, want %#v", got, signalRadioDisabledColor())
 	}
 }
 

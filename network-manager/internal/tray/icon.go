@@ -13,6 +13,7 @@ const (
 	signalIconBars signalIconMode = iota
 	signalIconStandby
 	signalIconOff
+	signalIconRadioDisabled
 	signalIconUnavailable
 )
 
@@ -30,6 +31,9 @@ func trayIcon(fill color.NRGBA, mode signalIconMode, bars int) []byte {
 	switch mode {
 	case signalIconOff:
 		drawOffMark(img, inactive)
+	case signalIconRadioDisabled:
+		drawSignalBars(img, 1, 14, 0, active, inactive)
+		drawSlashMark(img, signalRadioDisabledColor())
 	case signalIconStandby:
 		drawSignalBars(img, 1, 14, 0, active, inactive)
 	case signalIconUnavailable:
@@ -58,6 +62,10 @@ func signalWarningColor() color.NRGBA {
 	return color.NRGBA{R: 0xD6, G: 0x32, B: 0x32, A: 0xFF}
 }
 
+func signalRadioDisabledColor() color.NRGBA {
+	return color.NRGBA{R: 0xFF, G: 0x00, B: 0x00, A: 0xFF}
+}
+
 func drawSignalBars(img *image.NRGBA, x0, baseline, bars int, active, inactive color.NRGBA) {
 	if bars < 0 {
 		bars = 0
@@ -83,6 +91,15 @@ func drawSignalBars(img *image.NRGBA, x0, baseline, bars int, active, inactive c
 			for y := top; y <= baseline; y++ {
 				img.SetNRGBA(x, y, fill)
 			}
+		}
+	}
+}
+
+func drawSlashMark(img *image.NRGBA, fill color.NRGBA) {
+	for x, y := 3, 13; x <= 13; x, y = x+1, y-1 {
+		img.SetNRGBA(x, y, fill)
+		if x+1 < img.Bounds().Max.X {
+			img.SetNRGBA(x+1, y, fill)
 		}
 	}
 }
